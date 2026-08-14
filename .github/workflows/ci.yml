@@ -1,10 +1,19 @@
 name: CI
 
+# ─── WIP: Auto-triggers disabled during active development ────────────────────
+# CI will NOT run on push or PR while the codebase is being built out.
+# Re-enable the push/pull_request triggers on Day 13 before final submission.
+#
+# To run CI manually right now:
+#   GitHub → Actions tab → CI → "Run workflow" button
+# ──────────────────────────────────────────────────────────────────────────────
 on:
-  push:
-    branches: [main, develop]
-  pull_request:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you running CI manually?"
+        required: false
+        default: "Manual check"
 
 jobs:
   lint:
