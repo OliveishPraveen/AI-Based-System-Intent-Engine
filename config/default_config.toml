@@ -1,0 +1,65 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# Intent Engine — Default Configuration
+# Copy to ~/.intent_engine/config.toml to customize
+# ═══════════════════════════════════════════════════════════════════════════════
+
+[daemon]
+socket_path    = "/tmp/intent_engine.sock"
+pid_file       = "/tmp/intent_engine.pid"
+log_dir        = "~/.intent_engine/logs"
+log_level      = "INFO"               # DEBUG | INFO | WARNING | ERROR
+port           = 8765                 # HTTP fallback port (if socket unavailable)
+
+[safety]
+# Commands with risk_level AT OR ABOVE this threshold trigger the confirmation prompt
+# Options: LOW | MEDIUM | HIGH | CRITICAL
+block_threshold = "HIGH"
+
+# Always allow these commands without analysis (user allowlist)
+always_allow = []
+
+# Always block these commands regardless of analysis (user denylist)
+always_deny  = []
+
+# In dry_run mode, the engine analyzes but never blocks execution
+dry_run = false
+
+[llm]
+# Primary provider: "ollama" (local) | "gemini" (API) | "openai" (API)
+provider = "ollama"
+model    = "llama3.2:3b"
+
+# Fallback if primary is unavailable
+fallback_provider = "gemini"
+
+# Hard timeout for LLM response — exceed this and the engine uses fallback verdict
+timeout_s = 3.0
+
+# Ollama settings (when provider = "ollama")
+ollama_url = "http://localhost:11434"
+
+# API keys — set via environment variables, NOT here
+# INTENT_GEMINI_API_KEY=...
+# INTENT_OPENAI_API_KEY=...
+gemini_model = "gemini-2.0-flash"
+openai_model = "gpt-4o-mini"
+
+[ui]
+# Color theme for terminal UI
+theme = "dark"          # "dark" | "light" | "minimal"
+
+# Show latency information in the prompt
+show_latency = false
+
+# How long to wait for user input before auto-aborting (0 = wait forever)
+confirm_timeout_s = 0
+
+[audit]
+# Log all analyzed commands (even safe ones) for audit trail
+log_all = false
+
+# Log only flagged (non-SAFE) commands
+log_flagged = true
+
+# Audit log format: "json" | "text"
+log_format = "json"

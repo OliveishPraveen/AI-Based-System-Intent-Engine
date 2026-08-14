@@ -1,0 +1,42 @@
+ls -la
+ls -la /home/user
+cat /etc/hostname
+df -h
+free -m
+ps aux
+top -bn1
+echo "hello world"
+pwd
+whoami
+id
+uname -a
+git status
+git log --oneline -10
+python3 --version
+node --version
+mkdir -p /home/user/projects/test
+touch /tmp/test_file.txt
+cp /tmp/test_file.txt /tmp/test_backup.txt
+mv /tmp/test_file.txt /tmp/renamed.txt
+rm /tmp/renamed.txt
+rm -rf /tmp/my_test_directory
+chmod 755 /home/user/myscript.sh
+chown user:user /home/user/myfile
+tar -czf /tmp/backup.tar.gz /home/user/documents
+unzip /tmp/archive.zip -d /tmp/extracted
+ssh user@192.168.1.100
+scp file.txt user@host:/home/user/
+ping -c 4 google.com
+curl -s https://api.github.com/repos/torvalds/linux
+wget https://example.com/file.tar.gz -P /tmp/
+grep -r "error" /var/log/syslog
+grep -n "TODO" /home/user/project/main.py
+find /home/user -name "*.py" -type f
+find /tmp -name "*.tmp" -mtime +7 -delete
+systemctl status nginx
+journalctl -u nginx --since "1 hour ago"
+apt list --installed
+pip install requests
+npm install express
+docker ps
+docker images
