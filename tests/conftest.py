@@ -8,6 +8,15 @@ from __future__ import annotations
 
 import pytest
 
+
+def pytest_configure(config):
+    """Enable asyncio_mode=auto only when pytest-asyncio is installed."""
+    try:
+        import pytest_asyncio  # noqa: F401
+        config.option.__dict__.setdefault("asyncio_mode", "auto")
+    except (ImportError, AttributeError):
+        pass
+
 from engine.models import CommandContext, RiskLevel
 from engine.parser.command_parser import CommandParser, ParsedCommand
 

@@ -41,6 +41,36 @@ log = structlog.get_logger()
 SOCKET_PATH = Path(os.environ.get("INTENT_SOCKET", "/tmp/intent_engine.sock"))
 PID_FILE    = Path(os.environ.get("INTENT_PID",    "/tmp/intent_engine.pid"))
 LOG_DIR     = Path.home() / ".intent_engine" / "logs"
+LOG_FILE    = LOG_DIR / "daemon.log"
+
+
+def _configure_logging() -> None:
+    """Route all structlog output to a log file, keeping the terminal clean."""
+    import logging
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    # File handler — all daemon logs go here, not to the terminal
+    file_handler = logging.FileHandler(str(LOG_FILE), encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    logging.basicConfig(
+        handlers=[file_handler],
+        level=logging.DEBUG,
+        format="%(message)s",
+    )
+    structlog.configure(
+        processors=[
+            structlog.stdlib.add_log_level,
+            structlog.stdlib.add_logger_name,
+            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S"),
+            structlog.processors.StackInfoRenderer(),
+            structlog.dev.ConsoleRenderer(colors=False),
+        ],
+        wrapper_class=structlog.stdlib.BoundLogger,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=True,
+    )
+
+
+_configure_logging()
 
 # ─── Lifespan ─────────────────────────────────────────────────────────────────
 _router: IntentRouter | None = None
