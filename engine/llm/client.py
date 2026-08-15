@@ -78,5 +78,9 @@ class LLMClientFactory:
                 module_path, class_name = cls._PROVIDERS[fallback].rsplit(".", 1)
                 module = importlib.import_module(module_path)
                 client = getattr(module, class_name)(config)
+                if not await client.health_check():
+                    return None   # Both providers unreachable
+            else:
+                return None       # No provider reachable
 
         return client
