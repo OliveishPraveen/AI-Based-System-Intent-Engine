@@ -2,126 +2,174 @@
 Terminal UI — Owner: Harshit
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-ANSI-based confirmation prompt shown to the user when a risky command is detected.
-Reads AnalyzeResponse JSON from stdin (piped by the shell hook).
-Prints the user's action to stdout: EXECUTE | ABORT | EDIT | USE_SAFER
+Minimalist charcoal/monochrome confirmation prompt.
+No harsh red — uses ANSI 256-color greys and subtle accents.
 
 Usage (from shell hook):
-  echo "$response" | python3 -m engine.ui.terminal_ui
+  user_action=$(echo "$response" | python3 -m engine.ui.terminal_ui)
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from typing import Optional
 
-# ─── ANSI Colors ──────────────────────────────────────────────────────────────
-RESET  = "\033[0m"
-BOLD   = "\033[1m"
-RED    = "\033[91m"
-YELLOW = "\033[93m"
-GREEN  = "\033[92m"
-CYAN   = "\033[96m"
-WHITE  = "\033[97m"
-DIM    = "\033[2m"
+# ─── ANSI 256-color palette (charcoal/monochrome) ─────────────────────────────
+R   = "\033[0m"               # reset
+B   = "\033[1m"               # bold
+D   = "\033[2m"               # dim
 
-RISK_COLORS = {
-    "CRITICAL": RED,
-    "HIGH":     RED,
-    "MEDIUM":   YELLOW,
-    "LOW":      CYAN,
-    "SAFE":     GREEN,
+# Grey scale (256-color)
+G1  = "\033[38;5;235m"        # darkest charcoal (borders)
+G2  = "\033[38;5;241m"        # dark grey
+G3  = "\033[38;5;246m"        # mid grey
+G4  = "\033[38;5;250m"        # light grey
+G5  = "\033[38;5;255m"        # near-white (important text)
+
+# Subtle risk accents (muted, not garish)
+A_CRITICAL = "\033[38;5;174m"  # muted rose
+A_HIGH     = "\033[38;5;215m"  # soft amber
+A_MEDIUM   = "\033[38;5;222m"  # pale gold
+A_LOW      = "\033[38;5;110m"  # slate blue
+A_SAFE     = "\033[38;5;108m"  # sage green
+
+RISK_ACCENT = {
+    "CRITICAL": A_CRITICAL,
+    "HIGH":     A_HIGH,
+    "MEDIUM":   A_MEDIUM,
+    "LOW":      A_LOW,
+    "SAFE":     A_SAFE,
 }
 
-RISK_BARS = {
-    "CRITICAL": "██████████",
-    "HIGH":     "████████░░",
-    "MEDIUM":   "██████░░░░",
-    "LOW":      "████░░░░░░",
-    "SAFE":     "██░░░░░░░░",
+RISK_GLYPH = {
+    "CRITICAL": "◈",
+    "HIGH":     "◆",
+    "MEDIUM":   "◇",
+    "LOW":      "○",
+    "SAFE":     "●",
 }
 
+RISK_BAR = {
+    "CRITICAL": "▰▰▰▰▰▰▰▰▰▰",
+    "HIGH":     "▰▰▰▰▰▰▰▰▱▱",
+    "MEDIUM":   "▰▰▰▰▰▰▱▱▱▱",
+    "LOW":      "▰▰▰▱▱▱▱▱▱▱",
+    "SAFE":     "▰▱▱▱▱▱▱▱▱▱",
+}
 
-def render_prompt(response: dict) -> Optional[str]:
-    """
-    Render the confirmation UI and return the user's chosen action.
-    Returns None if the response is malformed.
-    """
-    verdict = response.get("verdict", {})
-    risk = verdict.get("risk_level", "UNKNOWN")
-    command = response.get("verdict", {}).get("matched_pattern", "")
-    # Extract original command from response if available
-    raw_command = verdict.get("reasoning", "")[:80]
-    impact = verdict.get("impact_summary", "Unknown impact")
-    reasoning = verdict.get("reasoning", "")
-    safer = verdict.get("safer_alternative")
-    color = RISK_COLORS.get(risk, WHITE)
-    bar = RISK_BARS.get(risk, "░░░░░░░░░░")
+W = 58   # box inner width (visible chars)
 
-    print(f"\n{color}{BOLD}", end="", file=sys.stderr)
-    print("╔══════════════════════════════════════════════════════════╗", file=sys.stderr)
-    print(f"║  ⚠  INTENT ENGINE — {risk:<37}║", file=sys.stderr)
-    print("╠══════════════════════════════════════════════════════════╣", file=sys.stderr)
-    print(f"║  Risk    : {bar} {risk:<14}               ║", file=sys.stderr)
-    print(f"║  Impact  : {impact[:54]:<54}  ║", file=sys.stderr)
 
-    if reasoning:
-        # Word-wrap reasoning to 54 chars
-        words = reasoning.split()
-        line = ""
-        for word in words[:30]:  # Limit display length
-            if len(line) + len(word) + 1 > 54:
-                print(f"║  Detail  : {line:<54}  ║", file=sys.stderr)
-                line = word
-            else:
-                line = f"{line} {word}".strip()
-        if line:
-            print(f"║          : {line:<54}  ║", file=sys.stderr)
+def _rule(char: str = "─") -> str:
+    return G1 + "  " + char * W + R
 
+
+def _line(label: str, value: str, accent: str = "") -> str:
+    label_part = f"{G3}{label}{G4}"
+    value_part = f"{accent}{value}{R}"
+    return f"  {G1}│{R}  {label_part}  {value_part}"
+
+
+def _wrap(text: str, width: int = 48) -> list[str]:
+    words = text.split()
+    lines, cur = [], ""
+    for w in words:
+        if len(cur) + len(w) + 1 > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = (cur + " " + w).strip()
+    if cur:
+        lines.append(cur)
+    return lines or [""]
+
+
+def render_prompt(response: dict) -> str:
+    v       = response.get("verdict", {})
+    risk    = v.get("risk_level", "UNKNOWN")
+    conf    = v.get("confidence", 0.0)
+    impact  = v.get("impact_summary", "Unknown impact.")
+    reason  = v.get("reasoning", "")
+    safer   = v.get("safer_alternative")
+    safer_x = v.get("safer_alternative_explanation", "")
+    accent  = RISK_ACCENT.get(risk, G4)
+    glyph   = RISK_GLYPH.get(risk, "◇")
+    bar     = RISK_BAR.get(risk, "▱▱▱▱▱▱▱▱▱▱")
+
+    err = sys.stderr
+    err.write("\n")
+
+    # ── Header ─────────────────────────────────────────────────────────────────
+    err.write(_rule("─") + "\n")
+    header = f"  {accent}{B}{glyph}  INTENT ENGINE{R}{G3}  ·  {R}{accent}{B}{risk}{R}{G3}  ·  {conf:.0%} confidence{R}"
+    err.write(header + "\n")
+    err.write(_rule("─") + "\n")
+
+    # ── Risk bar ───────────────────────────────────────────────────────────────
+    err.write(f"  {G1}│{R}  {G3}risk{R}    {accent}{bar}{R}  {G4}{risk}{R}\n")
+
+    # ── Impact ─────────────────────────────────────────────────────────────────
+    impact_lines = _wrap(impact, 46)
+    for i, line in enumerate(impact_lines):
+        label = f"{G3}impact{R}" if i == 0 else "      "
+        err.write(f"  {G1}│{R}  {label}  {G5}{line}{R}\n")
+
+    # ── Reasoning ──────────────────────────────────────────────────────────────
+    if reason:
+        reason_lines = _wrap(reason, 46)
+        for i, line in enumerate(reason_lines[:3]):
+            label = f"{G3}why{R}   " if i == 0 else "       "
+            err.write(f"  {G1}│{R}  {label}  {G4}{line}{R}\n")
+
+    # ── Safer alternative ─────────────────────────────────────────────────────
     if safer:
-        print("╠══════════════════════════════════════════════════════════╣", file=sys.stderr)
-        print(f"║  Safer   : {safer[:54]:<54}  ║", file=sys.stderr)
+        err.write(_rule("╌") + "\n")
+        err.write(f"  {G1}│{R}  {G3}safer{R}   {accent}{B}{safer}{R}\n")
+        if safer_x:
+            for line in _wrap(safer_x, 46)[:2]:
+                err.write(f"  {G1}│{R}           {G3}{line}{R}\n")
 
-    print("╠══════════════════════════════════════════════════════════╣", file=sys.stderr)
+    # ── Actions ────────────────────────────────────────────────────────────────
+    err.write(_rule("─") + "\n")
     if safer:
-        print("║  [y] Execute original  [n] Abort  [e] Edit  [s] Safer   ║", file=sys.stderr)
+        actions = f"{G4}[y]{R} {G3}execute{R}    {G4}[n]{R} {G3}abort{R}    {G4}[s]{R} {G3}use safer{R}"
     else:
-        print("║  [y] Execute original  [n] Abort  [e] Edit              ║", file=sys.stderr)
-    print("╚══════════════════════════════════════════════════════════╝", file=sys.stderr)
-    print(f"{RESET}", end="", file=sys.stderr)
+        actions = f"{G4}[y]{R} {G3}execute{R}    {G4}[n]{R} {G3}abort{R}"
+    err.write(f"  {G1}│{R}  {actions}\n")
+    err.write(_rule("─") + "\n")
 
-    # Read user input
+    # ── Input ──────────────────────────────────────────────────────────────────
     try:
-        sys.stderr.write("Your choice: ")
-        sys.stderr.flush()
-        choice = sys.stdin.readline().strip().lower()
-    except (EOFError, KeyboardInterrupt):
+        tty = open("/dev/tty", "r")
+        err.write(f"\n  {G3}choice:{R} {G4}")
+        err.flush()
+        choice = tty.readline().strip().lower()
+        err.write(R)
+        tty.close()
+    except (OSError, EOFError, KeyboardInterrupt):
+        err.write(f"\n{G2}  aborted.{R}\n")
         return "ABORT"
+
+    err.write("\n")
 
     if choice == "y":
         return "EXECUTE"
-    elif choice == "n" or choice == "":
-        return "ABORT"
-    elif choice == "e":
-        return "EDIT"
-    elif choice == "s" and safer:
+    if choice == "s" and safer:
         return "USE_SAFER"
-    else:
-        return "ABORT"
+    return "ABORT"
 
 
 def main() -> None:
-    """Entry point: read JSON from stdin, render prompt, print action to stdout."""
     try:
         raw = sys.stdin.read()
         response = json.loads(raw)
-    except (json.JSONDecodeError, Exception):
+    except Exception:
+        sys.stderr.write(f"{G2}  Intent Engine: failed to parse response.{R}\n")
         print("ABORT")
         sys.exit(1)
 
     action = render_prompt(response)
-    print(action or "ABORT")
+    print(action)
 
 
 if __name__ == "__main__":
