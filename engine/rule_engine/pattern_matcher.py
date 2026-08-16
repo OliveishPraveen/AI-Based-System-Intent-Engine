@@ -60,6 +60,44 @@ class MatchResult:
     safer_alternative_explanation: Optional[str] = None
     category: str = "general"
 
+# ── Tier 0 structural checks (hardcoded, no regex, no TOML) ──────────────────
+
+_FORK_BOMB_RE = re.compile(
+    r":\(\)\s*\{\s*:\s*\|"             # :(){ :|
+    r"|\.\(\)\s*\{\s*\.\s*\|"          # .() { .|
+    r"|bomb\(\)\s*\{"                   # bomb() {
+    r"|(\w)\(\)\s*\{\s*\1\s*\|\s*\1",  # x(){ x|x
+    re.IGNORECASE,
+)
+
+# Catches: rm -rf /   rm -rf /*   rm -r /   rm /*   rm rf/*   rm -rf ~/  etc.
+# Two branches:
+#   1. rm with any flags targeting root: rm [-flags] [/|/*|/.|/.*]
+#   2. rm with no flags but /*  as an argument  (rm rf/* style)
+_RM_ROOT_RE = re.compile(
+    r"rm"                                # command
+    r"(?:\s+-[a-zA-Z]*)*"               # optional flags (-r, -f, -rf, -i ...)
+    r"\s+(?:[^-]\S*\s+)*"              # optional non-flag args before path
+    r"(?:/[\*\.\s]|/\s*$|/\*|/\.\.?)",# target is root or root glob
+    re.IGNORECASE,
+)
+
+_CURL_PIPE_SHELL_RE = re.compile(
+    r"(?:curl|wget)\s+.*?\|\s*(?:ba)?sh\b"
+    r"|(?:curl|wget)\s+.*?\|\s*(?:zsh|fish|dash|ksh)\b",
+    re.IGNORECASE,
+)
+
+_DD_DEVICE_RE = re.compile(
+    r"dd\s+.*of=/dev/(?:sd|hd|nvme|vd|xvd|mmcblk)[a-z0-9]*",
+    re.IGNORECASE,
+)
+
+_MKFS_DEVICE_RE = re.compile(
+    r"mkfs(?:\.\w+)?\s+.*?/dev/(?:sd|hd|nvme|vd|mmcblk)[a-z0-9]*",
+    re.IGNORECASE,
+)
+
 
 class PatternMatcher:
     """
@@ -136,14 +174,28 @@ class PatternMatcher:
                 tier_used="rule_engine",
             )
 
-        # 2. Recursive deletion targeting root or root glob (rm -rf / or rm -rf /*)
-        if self._is_rm_root_tier0(parsed):
+        # 2. rm targeting root — catches ALL variants:
+        #    rm -rf /    rm -rf /*    rm /*    rm rf/*    rm -r /
+        #    Works on raw string so glob-expansion doesn't fool us.
+        if parsed.base_command == "rm" and _RM_ROOT_RE.search(parsed.raw):
+            # Distinguish: with recursive flag = CRITICAL, without = HIGH
+            has_recursive = any("-r" in f or "-R" in f for f in parsed.flags)
             return VerdictBuilder.build_verdict(
-                risk_level=RiskLevel.CRITICAL,
+                risk_level=RiskLevel.CRITICAL if has_recursive else RiskLevel.HIGH,
                 confidence=1.0,
                 matched_pattern="rm_rf_root",
-                reasoning="Recursive force-deletion targeting the filesystem root (/). This command will permanently erase all system files, binaries, configurations, and installed applications.",
-                impact_summary="Will permanently delete your entire operating system. Unrecoverable without full reinstall.",
+                reasoning=(
+                    "Recursive deletion targeting filesystem root. "
+                    "This will irreversibly delete ALL files on the system."
+                    if has_recursive else
+                    "rm targeting filesystem root without -r still deletes "
+                    "all non-directory files in root — destructive and irreversible."
+                ),
+                impact_summary=(
+                    "Will permanently delete your entire operating system. Unrecoverable without full reinstall."
+                    if has_recursive else
+                    "Will delete all non-directory files at filesystem root."
+                ),
                 safer_alternative=None,
                 safer_alternative_explanation="Deleting the root directory is never safe. Abort immediately.",
                 tier_used="rule_engine",
