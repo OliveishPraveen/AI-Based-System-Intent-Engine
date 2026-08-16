@@ -70,15 +70,17 @@ _FORK_BOMB_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Catches: rm -rf /   rm -rf /*   rm -r /   rm /*   rm rf/*   rm -rf ~/  etc.
-# Two branches:
-#   1. rm with any flags targeting root: rm [-flags] [/|/*|/.|/.*]
-#   2. rm with no flags but /*  as an argument  (rm rf/* style)
+# Catches ALL rm-targeting-root variants on the raw (pre-expansion) command:
+#   rm -rf /       rm -rf /*      rm /*
+#   rm rf/*        rm -r /        rm -f /*
+# Does NOT catch: rm /etc/foo  rm -rf /tmp/test  rm /home/user/file
 _RM_ROOT_RE = re.compile(
-    r"rm"                                # command
-    r"(?:\s+-[a-zA-Z]*)*"               # optional flags (-r, -f, -rf, -i ...)
-    r"\s+(?:[^-]\S*\s+)*"              # optional non-flag args before path
-    r"(?:/[\*\.\s]|/\s*$|/\*|/\.\.?)",# target is root or root glob
+    r"rm\b"                         # rm command
+    r".*?"                          # anything in between
+    r"(?:"
+    r"/\*"                         # /* glob  (rm rf/*  rm -rf /*  rm /*)
+    r"|(?<![\w/])/(?![\w/])"       # standalone /  (rm -rf /  rm -r /)
+    r")",
     re.IGNORECASE,
 )
 
