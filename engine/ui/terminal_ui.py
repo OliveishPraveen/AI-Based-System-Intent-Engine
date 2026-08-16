@@ -4,6 +4,8 @@ Terminal UI — Owner: Harshit
 
 Minimalist charcoal/monochrome confirmation prompt.
 No harsh red — uses ANSI 256-color greys and subtle accents.
+Writes an audit entry to ~/.intent_engine/logs/audit.jsonl
+for every user decision.
 
 Usage (from shell hook):
   user_action=$(echo "$response" | python3 -m engine.ui.terminal_ui)
@@ -12,7 +14,10 @@ Usage (from shell hook):
 from __future__ import annotations
 
 import json
+import os
 import sys
+
+from engine.audit import log_decision
 
 # ─── ANSI 256-color palette (charcoal/monochrome) ─────────────────────────────
 R   = "\033[0m"               # reset
@@ -148,15 +153,33 @@ def render_prompt(response: dict) -> str:
         tty.close()
     except (OSError, EOFError, KeyboardInterrupt):
         err.write(f"\n{G2}  aborted.{R}\n")
-        return "ABORT"
+        choice = "n"
 
     err.write("\n")
 
     if choice == "y":
-        return "EXECUTE"
-    if choice == "s" and safer:
-        return "USE_SAFER"
-    return "ABORT"
+        action = "EXECUTE"
+    elif choice == "s" and safer:
+        action = "USE_SAFER"
+    else:
+        action = "ABORT"
+
+    # ── Write audit entry ────────────────────────────────────────────────────
+    ctx = response.get("context", {})
+    log_decision(
+        command    = ctx.get("command", ""),
+        risk_level = risk,
+        confidence = conf,
+        pattern    = v.get("matched_pattern"),
+        tier       = v.get("tier_used", ""),
+        action     = action,
+        user       = ctx.get("user", os.environ.get("USER", "")),
+        cwd        = ctx.get("cwd", ""),
+        session_id = response.get("session_id", ""),
+        latency_ms = v.get("latency_ms", 0.0),
+    )
+
+    return action
 
 
 def main() -> None:
