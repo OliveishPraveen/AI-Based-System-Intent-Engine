@@ -2,14 +2,26 @@
 Rule Engine Package — Owner: Praveen (OliveishPraveen)
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-This is Praveen's primary domain. Architecture mirrors his Ai_Email_Classifier:
-  - Pattern library (analogous to rule-based filter layer)
-  - ML/heuristic classifier (analogous to DistilBERT model)
-  - FastAPI verdict serving (same backend pattern he already uses)
+Fast, deterministic Tier 0 and context-weighted Tier 1 command safety classification.
 
 Modules:
-  - classifier.py       : Main entry — orchestrates pattern matching
+  - classifier.py       : Main entry — orchestrates pattern matching & confidence scoring
   - pattern_matcher.py  : Regex + structural pattern matching engine
-  - verdict.py          : Verdict assembly and confidence scoring
   - pattern_loader.py   : Loads + validates dangerous_patterns.toml
+  - verdict_builder.py  : Dynamic template rendering & verdict construction
+  - service.py          : Standalone FastAPI microservice
+  - visualizer.py       : Rich CLI inspection & corpus benchmarking
 """
+
+from engine.rule_engine.classifier import RuleEngineClassifier
+from engine.rule_engine.pattern_loader import PatternLoader
+from engine.rule_engine.pattern_matcher import MatchResult, PatternMatcher
+from engine.rule_engine.verdict_builder import VerdictBuilder
+
+__all__ = [
+    "RuleEngineClassifier",
+    "PatternLoader",
+    "PatternMatcher",
+    "MatchResult",
+    "VerdictBuilder",
+]

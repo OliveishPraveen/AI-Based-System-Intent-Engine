@@ -1,5 +1,5 @@
 # ═══════════════════════════════════════════════════════════════════════════════
-# Dangerous Patterns Library — Owner: Praveen
+# Dangerous Patterns Library — Owner: Praveen (OliveishPraveen)
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # FORMAT PER PATTERN:
@@ -7,6 +7,7 @@
 #   name       = "unique_snake_case_id"        # used as lookup key in code
 #   tier       = 0 | 1                         # 0 = instant CRITICAL, 1 = scored
 #   risk_level = "CRITICAL|HIGH|MEDIUM|LOW"
+#   category   = "destruction|storage|privilege|network|exposure|tampering|execution"
 #   commands   = ["rm", "shred"]               # base commands this applies to
 #   regex      = '...'                         # regex tested against FULL raw command
 #   flags_required  = ["-r", "-f"]             # ALL must be present (optional)
@@ -21,14 +22,17 @@
 # TIER 1 patterns = confidence-scored, context-weighted
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# ── TIER 0: CRITICAL — Immediate catches ─────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 0: CRITICAL — Immediate Catches (100% Confidence, 0% Ambiguity)
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[patterns]]
 name       = "fork_bomb"
 tier       = 0
 risk_level = "CRITICAL"
+category   = "execution"
 commands   = []
-regex      = ':\(\)\s*\{\s*:\s*\|'
+regex      = '(?::\(\)\s*\{\s*:\s*\||bomb\(\)\s*\{\s*bomb\s*\|\s*bomb\b|\(\)\s*\{\s*:\s*\||\b(\w+)\(\)\s*\{\s*\1\s*\|\s*\1\s*&\s*\}\s*;\s*\1)'
 reasoning_template = "Fork bomb detected. This pattern creates recursive processes that exhaust all system process slots, making the machine unresponsive and requiring a hard reboot."
 impact_template    = "Will crash your system. Requires hard reboot to recover."
 safer_alternative  = ""
@@ -38,8 +42,9 @@ safer_explanation  = "There is no safe version of a fork bomb."
 name       = "rm_rf_root"
 tier       = 0
 risk_level = "CRITICAL"
+category   = "destruction"
 commands   = ["rm"]
-regex      = 'rm\s+.*-[a-z]*r[a-z]*f[a-z]*\s+[/](?:\s|$|\*)'
+regex      = '\brm\s+.*(?:-[a-zA-Z]*[rf][a-zA-Z]*\s+)+.*(?:/[*]?|--no-preserve-root)'
 reasoning_template = "Recursive force-deletion targeting the filesystem root. This will irreversibly delete all files on the system."
 impact_template    = "Will permanently delete your entire operating system. Unrecoverable."
 safer_alternative  = ""
@@ -49,8 +54,9 @@ safer_explanation  = "There is no safe alternative to deleting root. Abort immed
 name       = "dd_raw_device"
 tier       = 0
 risk_level = "CRITICAL"
+category   = "storage"
 commands   = ["dd"]
-regex      = 'dd\s+.*of=/dev/(?:sd|hd|nvme|vd|xvd)[a-z](?:\d+)?\b'
+regex      = '\bdd\s+.*of=/dev/(?:sd|hd|nvme|vd|xvd|loop|mmcblk)[a-zA-Z0-9_-]*'
 reasoning_template = "dd writing directly to a raw block device. This overwrites the device's partition table and all data without any confirmation."
 impact_template    = "Will destroy all data on the target disk. Completely unrecoverable."
 safer_alternative  = "fallocate -l 10G /tmp/test.img"
@@ -60,8 +66,9 @@ safer_explanation  = "Use a loop-back image file for testing instead of writing 
 name       = "mkfs_device"
 tier       = 0
 risk_level = "CRITICAL"
-commands   = ["mkfs", "mkfs.ext4", "mkfs.xfs", "mkfs.btrfs", "mkfs.fat"]
-regex      = 'mkfs(?:\.\w+)?\s+.*?/dev/(?:sd|hd|nvme|vd)[a-z]'
+category   = "storage"
+commands   = ["mkfs", "mkfs.ext4", "mkfs.ext3", "mkfs.ext2", "mkfs.xfs", "mkfs.btrfs", "mkfs.fat", "mkfs.vfat", "mkfs.ntfs"]
+regex      = '\bmkfs(?:\.\w+)?\s+.*?/dev/(?:sd|hd|nvme|vd|xvd|loop|mmcblk)[a-zA-Z0-9_-]*'
 reasoning_template = "Filesystem format command targeting a real block device. This erases all data on the partition."
 impact_template    = "Will format and erase all data on the target device."
 safer_alternative  = ""
@@ -71,102 +78,342 @@ safer_explanation  = "Verify the device is not mounted and not your system disk 
 name       = "curl_pipe_shell"
 tier       = 0
 risk_level = "CRITICAL"
-commands   = ["curl", "wget"]
-regex      = '(?:curl|wget)\s+.*?\|\s*(?:ba)?sh\b'
+category   = "execution"
+commands   = ["curl", "wget", "fetch"]
+regex      = '\b(?:curl|wget|fetch)\s+.*?\|\s*(?:sudo\s+)?(?:ba|z|k|c|t?c)?sh\b'
 reasoning_template = "Pipe-to-shell execution pattern. Downloads and immediately executes remote code without inspection. This is a primary vector for supply-chain attacks."
 impact_template    = "Executes unreviewed remote code with your current user privileges."
-safer_alternative  = "curl -o /tmp/script.sh {url} && cat /tmp/script.sh"
-safer_explanation  = "Download the script first, read it, then decide if it's safe to run."
-
-# ── TIER 1: HIGH — Dangerous with high confidence ────────────────────────────
+safer_alternative  = "curl -sSO {url} && cat {script_name} # Review before running"
+safer_explanation  = "Download the script first, inspect its contents, and run it only after review."
 
 [[patterns]]
-name       = "rm_rf_var_log"
-tier       = 1
-risk_level = "HIGH"
-commands   = ["rm"]
-regex      = 'rm\s+.*-[a-z]*r[a-z]*f[a-z]*\s+/var/log'
-reasoning_template = "Recursive force-deletion of /var/log. Active system log files including syslog, auth.log, and journald data will be permanently deleted. Running services write to these files continuously."
-impact_template    = "Permanently deletes all system logs. Active services may crash."
-safer_alternative  = "sudo journalctl --vacuum-size=500M"
-safer_explanation  = "Frees disk space by removing old journal entries while keeping active logs intact."
+name       = "cat_pipe_shell"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "execution"
+commands   = ["cat"]
+regex      = '\bcat\s+.*?\|\s*(?:sudo\s+)?(?:ba|z|k|c|t?c)?sh\b'
+reasoning_template = "Piping file contents directly into a shell interpreter executes code without interactive control."
+impact_template    = "Executes file content directly as shell code."
+safer_alternative  = "bash -n {script_name} # Syntax check before executing"
+safer_explanation  = "Perform a syntax check and inspect the file before executing."
 
 [[patterns]]
-name       = "chmod_777_system"
-tier       = 1
-risk_level = "HIGH"
-commands   = ["chmod"]
-regex      = 'chmod\s+.*-[Rr]\s+(?:0?777|a\+rwx)\s+/'
-reasoning_template = "World-writable permissions applied recursively to a system path. Any user on the system can modify or replace these files, including executables and configuration."
-impact_template    = "Makes system files writable by all users — a critical security vulnerability."
-safer_alternative  = "chmod -R 755 {path}"
-safer_explanation  = "755 grants owner full access and others read/execute — appropriate for most web directories."
-
-[[patterns]]
-name       = "shred_device"
-tier       = 1
-risk_level = "HIGH"
-commands   = ["shred", "wipe"]
-regex      = '(?:shred|wipe)\s+.*?/dev/(?:sd|hd|nvme)'
-reasoning_template = "Secure-erase command targeting a block device. This performs multiple overwrite passes, making recovery impossible."
-impact_template    = "Permanently and irreversibly destroys all data on the target device."
+name       = "redirect_to_device"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "storage"
+commands   = []
+regex      = '(?:>>?|tee)\s+/dev/(?:sd|hd|nvme|vd|xvd)[a-zA-Z0-9_-]*'
+reasoning_template = "Redirecting data directly into a raw block device file overwrites disk sectors and destroys partition tables."
+impact_template    = "Will corrupt disk partition tables and destroy raw storage data."
 safer_alternative  = ""
-safer_explanation  = "If you intend to securely erase a disk, ensure you have identified the correct device with lsblk first."
+safer_explanation  = "Never write raw text or stream data directly to /dev disk nodes."
 
 [[patterns]]
-name       = "truncate_log"
-tier       = 1
-risk_level = "HIGH"
-commands   = ["truncate", ">"]
-regex      = '(?:truncate\s+-s\s+0|>\s*/dev/null\s+<|>\s+)/(?:var/log|var/spool)'
-reasoning_template = "Truncating active log files can cause running services to lose their file handle, resulting in silent log loss or service crashes."
-impact_template    = "Silently breaks logging for running services."
-safer_alternative  = "sudo systemctl rotate-logs"
-safer_explanation  = "Log rotation safely closes and reopens log files while services continue running."
+name       = "proc_sysrq_trigger"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "destruction"
+commands   = []
+regex      = '(?:echo|printf)\s+.*?>\s*/proc/sysrq-trigger'
+reasoning_template = "Writing to /proc/sysrq-trigger sends emergency SysRq commands directly to the Linux kernel, triggering immediate reboots, kernel panics, or crashes."
+impact_template    = "Forces an immediate kernel reset or hard panic, bypassing clean shutdown."
+safer_alternative  = "sudo systemctl reboot"
+safer_explanation  = "Use standard systemctl commands to gracefully unmount filesystems and notify services."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1: CRITICAL / HIGH — Severe System Risks (Scored & Context-Weighted)
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[patterns]]
 name       = "rm_boot"
 tier       = 1
 risk_level = "CRITICAL"
+category   = "destruction"
 commands   = ["rm"]
-regex      = 'rm\s+.*-[a-z]*r[a-z]*\s+/boot'
-reasoning_template = "Deletion targeting /boot. This directory contains the kernel, initramfs, and bootloader configuration. Removing it makes the system unbootable."
-impact_template    = "Will make your system unable to boot. Recovery requires a live USB."
+regex      = '\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+.*?/boot(?:\s|/|$|\*)'
+reasoning_template = "Deletion targeting /boot. This directory contains the kernel image (vmlinuz), initramfs, and GRUB bootloader configuration. Removing it renders the system unbootable."
+impact_template    = "Will make your system unable to boot. Recovery requires a live rescue USB."
 safer_alternative  = ""
-safer_explanation  = "Never delete /boot unless deliberately decommissioning this machine."
+safer_explanation  = "Never delete /boot files manually unless using your package manager's kernel management."
 
-# ── TIER 1: MEDIUM ────────────────────────────────────────────────────────────
+[[patterns]]
+name       = "rm_etc"
+tier       = 1
+risk_level = "CRITICAL"
+category   = "destruction"
+commands   = ["rm"]
+regex      = '\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+.*?/etc(?:\s|/|$|\*)'
+reasoning_template = "Recursive deletion targeting /etc. /etc stores all system configuration files, passwords, service definitions, and network configs. Deleting it will immediately cripple system services."
+impact_template    = "Destroys all system configuration, user definitions, and network services."
+safer_alternative  = ""
+safer_explanation  = "Target only specific application configuration files in a dedicated backup workflow."
+
+[[patterns]]
+name       = "rm_bin_sbin_usr"
+tier       = 1
+risk_level = "CRITICAL"
+category   = "destruction"
+commands   = ["rm"]
+regex      = '\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+.*?/(?:bin|sbin|usr|lib|lib64)(?:\s|/|$|\*)'
+reasoning_template = "Recursive deletion targeting system binary and library directories (/bin, /sbin, /usr, /lib). Critical executables including sh, bash, and coreutils will be destroyed."
+impact_template    = "Permanently deletes essential system utilities and libraries."
+safer_alternative  = ""
+safer_explanation  = "Use the package manager (apt/dnf/pacman) to uninstall packages safely."
+
+[[patterns]]
+name       = "rm_home_root"
+tier       = 1
+risk_level = "CRITICAL"
+category   = "destruction"
+commands   = ["rm"]
+regex      = '\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+.*?(?:~/?(?:\*)?|/home/?(?:\*)?|/root/?(?:\*)?)(?:\s|$)'
+reasoning_template = "Recursive deletion targeting user home directory or all /home accounts. All personal documents, SSH keys, credentials, and configuration files will be deleted."
+impact_template    = "Will delete all user documents, repositories, and home directories."
+safer_alternative  = "rm -rf {path}/old_subfolder"
+safer_explanation  = "Explicitly specify the specific subdirectory rather than wiping entire user homes."
+
+[[patterns]]
+name       = "rm_ssh_keys"
+tier       = 1
+risk_level = "HIGH"
+category   = "exposure"
+commands   = ["rm"]
+regex      = '\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+.*?(?:~/\.ssh|/home/\w+/\.ssh|\.ssh)(?:\s|/|$|\*)'
+reasoning_template = "Deleting the .ssh configuration directory deletes private cryptographic SSH keys, authorized_keys, and known hosts. You will lose SSH access to remote servers and lock out authorized SSH keys."
+impact_template    = "Permanently deletes all private SSH keys and authorized key configurations."
+safer_alternative  = "mv ~/.ssh ~/.ssh.backup # Back up existing keys first"
+safer_explanation  = "Create a backup of the .ssh directory instead of permanently deleting all keys."
+
+[[patterns]]
+name       = "rm_rf_var_log"
+tier       = 1
+risk_level = "HIGH"
+category   = "destruction"
+commands   = ["rm"]
+regex      = '\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+.*?/var/log(?:\s|/|$|\*)'
+reasoning_template = "Recursive deletion of /var/log. Active system log files including syslog, auth.log, and journald data will be permanently deleted. Running services write to these files continuously."
+impact_template    = "Permanently deletes all system logs. Active logging services may crash."
+safer_alternative  = "sudo journalctl --vacuum-size=500M"
+safer_explanation  = "Frees disk space by pruning old journal logs while keeping active logs intact."
+
+[[patterns]]
+name       = "chmod_777_system"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = ["chmod"]
+regex      = '\bchmod\s+.*-[a-zA-Z]*[Rr][a-zA-Z]*\s+(?:0?777|a\+rwx)\s+/(?:etc|usr|var|bin|sbin|boot|root)?(?:\s|/|$|\*)'
+reasoning_template = "World-writable permissions (777/a+rwx) applied recursively to a system directory. Any user or compromised process on the system will be able to modify, overwrite, or plant malicious binaries."
+impact_template    = "Makes system files world-writable, exposing the entire system to privilege escalation."
+safer_alternative  = "chmod -R 755 {path}"
+safer_explanation  = "755 grants the owner full access and other users read/execute only."
+
+[[patterns]]
+name       = "chmod_777_home"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = ["chmod"]
+regex      = '\bchmod\s+.*-[a-zA-Z]*[Rr][a-zA-Z]*\s+(?:0?777|a\+rwx)\s+/(?:home|home/\w+)(?:\s|/|$|\*)'
+reasoning_template = "World-writable permissions applied recursively to /home. All user files, SSH keys, history, and sensitive tokens become readable and writable by any local user."
+impact_template    = "Makes all user home directories accessible to any local account."
+safer_alternative  = "chmod -R 750 /home/{user}"
+safer_explanation  = "750 restricts access strictly to the owner and owner's group."
+
+[[patterns]]
+name       = "chmod_sudoers"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = ["chmod"]
+regex      = '\bchmod\s+.*(?:\b777\b|\bo\+w\b|\ba\+w\b|\b0666\b|\b0777\b).*/etc/sudoers(?:\.d)?(?:\s|$)'
+reasoning_template = "Modifying permissions of /etc/sudoers or /etc/sudoers.d. sudo refuses to run if sudoers is world-writable or has incorrect mode (must be 0440)."
+impact_template    = "Breaks sudo functionality and allows unauthorized privilege escalation."
+safer_alternative  = "sudo visudo"
+safer_explanation  = "Always use visudo, which locks the file and validates syntax before saving."
+
+[[patterns]]
+name       = "shred_device"
+tier       = 1
+risk_level = "HIGH"
+category   = "storage"
+commands   = ["shred", "wipe", "scrub"]
+regex      = '\b(?:shred|wipe|scrub)\s+.*?/dev/(?:sd|hd|nvme|vd|xvd|loop|mmcblk)[a-zA-Z0-9_-]*'
+reasoning_template = "Secure-erase command targeting a block device. This performs multiple overwrite passes, destroying filesystem structures and making recovery impossible."
+impact_template    = "Permanently and irreversibly destroys all data on the target storage device."
+safer_alternative  = "lsblk -f # Verify the device identity first"
+safer_explanation  = "Identify and unmount the target volume before running secure disk sanitization."
+
+[[patterns]]
+name       = "truncate_log"
+tier       = 1
+risk_level = "HIGH"
+category   = "tampering"
+commands   = []
+regex      = '(?:\btruncate\s+-s\s+0\s+.*?/var/log|>\s*/var/log/(?:syslog|auth\.log|messages|journal|dmesg)|\bcat\s+/dev/null\s+>\s*/var/log)'
+reasoning_template = "Direct truncation or zero-byte overwrite of active system log files. Log daemons may hold open file descriptors and fail to write subsequent events."
+impact_template    = "Erases active log entries and may silently break system audit logging."
+safer_alternative  = "sudo logrotate -f /etc/logrotate.conf"
+safer_explanation  = "Logrotate safely rotates and archives active logs without breaking open file descriptors."
+
+[[patterns]]
+name       = "passwd_tampering"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = []
+regex      = '(?:>>?|tee\s+-a)\s+/etc/(?:passwd|shadow|sudoers|group)'
+reasoning_template = "Directly appending or redirecting text to /etc/passwd or /etc/shadow. Corrupted format or unauthorized root entries can break authentication or create root backdoors."
+impact_template    = "Directly modifies core system authentication tables."
+safer_alternative  = "sudo useradd -m {username} # or sudo passwd {username}"
+safer_explanation  = "Use useradd or usermod to manage system accounts safely."
+
+[[patterns]]
+name       = "passwd_root"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = ["passwd"]
+regex      = '\bpasswd\s+(?:-d\s+|--delete\s+)?root\b'
+reasoning_template = "Modifying the root account password or deleting the root password. Changing root credentials can lock out administrative recovery."
+impact_template    = "Alters root administrative authentication credentials."
+safer_alternative  = "sudo -i # Use sudo session rather than changing root password"
+safer_explanation  = "Manage administrative duties via sudo privileges rather than direct root password sharing."
+
+[[patterns]]
+name       = "iptables_flush"
+tier       = 1
+risk_level = "HIGH"
+category   = "network"
+commands   = ["iptables", "ip6tables", "nft"]
+regex      = '\b(?:iptables|ip6tables)\s+.*-(?:F|flush)\b|\bnft\s+flush\s+ruleset\b'
+reasoning_template = "Flushing firewall rules removes all active packet filtering, NAT rules, and port protection immediately, exposing internal ports to network attacks."
+impact_template    = "Removes all firewall protections and exposes host ports."
+safer_alternative  = "sudo iptables-save > /tmp/iptables.bak && sudo iptables -S"
+safer_explanation  = "Back up the current ruleset and inspect specific chains before flushing."
+
+[[patterns]]
+name       = "firewall_disable"
+tier       = 1
+risk_level = "HIGH"
+category   = "network"
+commands   = ["ufw", "systemctl", "service"]
+regex      = '(?:\bufw\s+disable\b|\bsystemctl\s+(?:stop|disable|mask)\s+firewalld\b|\bservice\s+firewalld\s+stop\b)'
+reasoning_template = "Disabling the host firewall turns off all inbound connection filtering, exposing listening database and service ports."
+impact_template    = "Deactivates system firewall protection."
+safer_alternative  = "sudo ufw status verbose # or sudo ufw allow from <trusted_ip>"
+safer_explanation  = "Open specific necessary ports rather than disabling the entire firewall."
+
+[[patterns]]
+name       = "history_erasure"
+tier       = 1
+risk_level = "HIGH"
+category   = "tampering"
+commands   = ["history", "rm"]
+regex      = '(?:\bhistory\s+-c\b.*(?:\.bash_history|\.zsh_history)|\brm\s+.*(?:\.bash_history|\.zsh_history))'
+reasoning_template = "Clearing shell history and deleting history files is commonly used to remove forensic audit trails and anti-tamper records."
+impact_template    = "Destroys shell execution history and user audit trails."
+safer_alternative  = ""
+safer_explanation  = "Terminal history provides an essential record for debugging and security auditing."
+
+[[patterns]]
+name       = "crontab_remove"
+tier       = 1
+risk_level = "HIGH"
+category   = "tampering"
+commands   = ["crontab", "rm"]
+regex      = '(?:\bcrontab\s+.*-[r]\b|\brm\s+.*-[a-zA-Z]*r[a-zA-Z]*\s+/etc/cron)'
+reasoning_template = "Removing user crontab (-r) or deleting system cron directories immediately stops all automated backups, log rotations, and scheduled tasks."
+impact_template    = "Permanently deletes scheduled automation and backup jobs."
+safer_alternative  = "crontab -e # Edit specific jobs instead of removing all"
+safer_explanation  = "Use crontab -e or crontab -l to manage entries individually."
+
+[[patterns]]
+name       = "reverse_shell"
+tier       = 1
+risk_level = "HIGH"
+category   = "execution"
+commands   = ["nc", "ncat", "netcat", "socat", "bash"]
+regex      = '(?:\bnc(?:\.traditional)?\s+.*-e\s+/(?:bin/)?(?:ba)?sh|\bbash\s+-i\s+>&?\s*/dev/tcp/|\bsocat\s+exec:)'
+reasoning_template = "Spawning an interactive reverse shell redirects an interactive bash session over a network socket to an external address."
+impact_template    = "Grants remote interactive shell control over the network."
+safer_alternative  = "ssh {target_host} # Use secure SSH instead"
+safer_explanation  = "Use encrypted SSH tunnels and key authentication for remote shell access."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1: MEDIUM — Moderate Risk & Sensitive Information Access
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[patterns]]
 name       = "cat_shadow"
 tier       = 1
 risk_level = "MEDIUM"
-commands   = ["cat", "less", "more", "head", "tail"]
-regex      = '(?:cat|less|more|head|tail)\s+/etc/shadow'
-reasoning_template = "Reading /etc/shadow exposes hashed system passwords. While reading (not writing) this file requires root, the hashes can be subjected to offline cracking attacks."
-impact_summary     = "Exposes hashed user passwords to screen or shell history."
-impact_template    = "Displays hashed system passwords — keep this output private."
-safer_alternative  = "sudo passwd {username}"
-safer_explanation  = "Use passwd to change a specific user's password without viewing all hashes."
+category   = "exposure"
+commands   = ["cat", "less", "more", "head", "tail", "nl"]
+regex      = '\b(?:cat|less|more|head|tail|nl)\s+/etc/(?:shadow|gshadow)(?:\s|$)'
+reasoning_template = "Reading /etc/shadow or /etc/gshadow displays password hashes for system accounts. These hashes can be extracted for offline dictionary or brute-force cracking."
+impact_template    = "Displays encrypted system password hashes to the screen or history."
+safer_alternative  = "sudo getent passwd {username}"
+safer_explanation  = "Query account details without viewing password hashes."
 
 [[patterns]]
 name       = "expose_ssh_key"
 tier       = 1
 risk_level = "MEDIUM"
-commands   = ["cat", "less", "more"]
-regex      = '(?:cat|less|more)\s+~?/.ssh/id_(?:rsa|ed25519|ecdsa)(?:\s|$)'
-reasoning_template = "Printing a private SSH key to stdout may expose it in terminal logs, clipboard history, or screen sharing sessions."
-impact_template    = "Displays your private SSH key — visible to anyone watching your screen or terminal log."
-safer_alternative  = "ssh-keygen -l -f ~/.ssh/id_rsa"
-safer_explanation  = "This shows only the public fingerprint, not the secret key material."
+category   = "exposure"
+commands   = ["cat", "less", "more", "head", "tail"]
+regex      = '\b(?:cat|less|more|head|tail)\s+~?/?(?:home/\w+/|\.ssh/|root/)?\.ssh/id_(?:rsa|ed25519|ecdsa|dsa)(?:\s|$)'
+reasoning_template = "Displaying private SSH key material directly in terminal output exposes secrets to shell logs, clipboard tools, and screen sharing."
+impact_template    = "Exposes private cryptographic SSH keys."
+safer_alternative  = "ssh-keygen -l -f ~/.ssh/id_rsa.pub"
+safer_explanation  = "Inspect the public key fingerprint rather than the private secret."
 
 [[patterns]]
 name       = "find_exec_delete"
 tier       = 1
 risk_level = "MEDIUM"
+category   = "destruction"
 commands   = ["find"]
-regex      = 'find\s+/\s+.*?-(?:exec\s+rm|delete)'
-reasoning_template = "find with -delete or -exec rm starting from the root. The scope of deletion depends on the -name or -type filters. A mistake in the filter could delete far more than intended."
-impact_template    = "May delete files across the entire filesystem depending on the filter pattern."
-safer_alternative  = "find /var/log -name '*.log' -mtime +30 -delete"
-safer_explanation  = "Scope the find to a specific directory and file type with a time constraint."
+regex      = '\bfind\s+/(?:etc|var|usr|home|root)?(?:\s|/|$).*?-(?:exec\s+rm|delete)'
+reasoning_template = "Executing find with -delete or -exec rm across top-level system directories. A single mistake in pattern filtering can recursively delete unintended system files."
+impact_template    = "May delete large numbers of matching files across top-level directories."
+safer_alternative  = "find {path} -name '*.log' -print # Verify list first before deleting"
+safer_explanation  = "Test with -print or -ls to review matches before applying -delete."
+
+[[patterns]]
+name       = "system_shutdown_reboot"
+tier       = 1
+risk_level = "MEDIUM"
+category   = "destruction"
+commands   = ["shutdown", "reboot", "init", "poweroff", "halt"]
+regex      = '\b(?:shutdown\s+-(?:h|r)\s+now|\breboot\s+-f\b|\binit\s+[06]\b|\bpoweroff\s+-f\b|\bhalt\s+-f\b)'
+reasoning_template = "Initiating an immediate forced shutdown or reboot terminates active sessions and interrupts running services."
+impact_template    = "Shuts down or restarts the operating system immediately."
+safer_alternative  = "sudo systemctl reboot # or shutdown +5 'Maintenance reboot in 5m'"
+safer_explanation  = "Provide a scheduled delay so running tasks and users can save work."
+
+[[patterns]]
+name       = "move_passwd_symlink"
+tier       = 1
+risk_level = "HIGH"
+category   = "tampering"
+commands   = ["mv", "ln"]
+regex      = '\bmv\s+/etc/passwd\b.*\bln\s+.*(?:/dev/null\s+/etc/passwd|/etc/passwd)'
+reasoning_template = "Replacing /etc/passwd with a symbolic link to /dev/null destroys all user accounts and denies login authentication."
+impact_template    = "Destroys user account mapping and permanently locks out logins."
+safer_alternative  = ""
+safer_explanation  = "Never replace vital system databases with null links."
+
+[[patterns]]
+name       = "ulimit_resource_limit"
+tier       = 1
+risk_level = "MEDIUM"
+category   = "execution"
+commands   = ["ulimit"]
+regex      = '\bulimit\s+.*-(?:u|n|f|v|s|c|m|d|l|p|t|x|e|r|i|q)\b(?:\s+\w+)?'
+reasoning_template = "Modifying shell resource limits with ulimit (such as maximum user processes, open file descriptors, or virtual memory). Restrictive limits can prevent spawning new processes and crash or lock out your active shell session, while setting them to unlimited may exhaust system resources."
+impact_template    = "Modifies process or resource caps for the shell session, which may freeze process creation or cause instability."
+safer_alternative  = "ulimit -a # Inspect current limits before modifying"
+safer_explanation  = "Use 'ulimit -a' to inspect soft and hard resource limits before applying adjustments."

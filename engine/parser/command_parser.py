@@ -103,8 +103,15 @@ class CommandParser:
         if is_sudo and len(tokens) > 1:
             # Skip sudo + any sudo flags (e.g. sudo -u root rm ...)
             skip = 1
-            while skip < len(tokens) and tokens[skip].startswith("-"):
-                skip += 1
+            sudo_opts_with_arg = {"-u", "--user", "-g", "--group", "-p", "--prompt", "-U", "--other-user", "-C", "--close-from"}
+            while skip < len(tokens):
+                tok = tokens[skip]
+                if tok in sudo_opts_with_arg:
+                    skip += 2
+                elif tok.startswith("-"):
+                    skip += 1
+                else:
+                    break
             effective_tokens = tokens[skip:]
 
         base_command = effective_tokens[0] if effective_tokens else ""
