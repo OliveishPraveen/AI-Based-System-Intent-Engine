@@ -4,61 +4,78 @@
 # Owner: Harshit
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# HOW IT WORKS:
-#   Zsh fires `preexec` with the command string BEFORE executing it.
-#   We send the command to the daemon and, if RISKY, block it and show
-#   the confirmation UI. The user then chooses to proceed, abort, or edit.
+# Zsh fires `preexec` BEFORE executing each command. We send the command
+# to the daemon and, if RISKY, present a confirmation UI.
+#
+# IMPORTANT: Zsh's preexec() cannot directly prevent execution.
+# We use a flag + precmd() to clear the buffer if the user chose ABORT.
 #
 # INSTALL:
-#   The install.sh script appends `source ~/.intent_engine/hooks/intent_hook.zsh`
-#   to your ~/.zshrc automatically.
+#   Add to your ~/.zshrc:
+#     source /path/to/intent_hook.zsh
 #
 # BYPASS:
-#   Set INTENT_ENGINE_SKIP=1 to disable for a single command:
-#     INTENT_ENGINE_SKIP=1 rm -rf /tmp/test
+#   INTENT_ENGINE_SKIP=1 rm -rf /tmp/test
 # ═══════════════════════════════════════════════════════════════════════════════
 
 # ─── Config ───────────────────────────────────────────────────────────────────
 INTENT_SOCKET="${INTENT_SOCKET:-/tmp/intent_engine.sock}"
-INTENT_DAEMON_URL="http://localhost:8765"  # HTTP fallback if socket unavailable
 INTENT_ENGINE_ENABLED="${INTENT_ENGINE_ENABLED:-1}"
-INTENT_SESSION_ID="${INTENT_SESSION_ID:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)}"
+INTENT_SESSION_ID="${INTENT_SESSION_ID:-$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo "$$-$(date +%s)")}"
+export INTENT_SESSION_ID
 
-# ─── Daemon health check (runs once at shell startup) ─────────────────────────
+# Repo root for module resolution
+INTENT_REPO_DIR="${0:A:h:h}"
+export PYTHONPATH="${INTENT_REPO_DIR}:${PYTHONPATH}"
+
+# ─── State ────────────────────────────────────────────────────────────────────
+typeset -g _INTENT_BLOCK=0       # 1 = user chose ABORT, suppress next command
+typeset -g _INTENT_INTERNAL=0    # Guard against recursive interception
+
+# ─── Daemon health check ─────────────────────────────────────────────────────
 _intent_check_daemon() {
-    curl --silent --unix-socket "$INTENT_SOCKET" \
+    curl --silent --max-time 1 --unix-socket "$INTENT_SOCKET" \
          http://localhost/health > /dev/null 2>&1
 }
 
 # Start daemon if not running
-_intent_start_daemon() {
-    if ! _intent_check_daemon; then
-        python3 -m engine.daemon.server &
-        disown
-        sleep 0.5  # Give daemon a moment to bind the socket
+if ! _intent_check_daemon; then
+    print -u2 "\033[2m  Intent Engine: daemon not running. Starting...\033[0m"
+    (cd "$INTENT_REPO_DIR" && python3 -m engine.daemon.server &) 2>/dev/null
+    disown 2>/dev/null
+    sleep 1
+    if _intent_check_daemon; then
+        print -u2 "\033[32m  ✓ Intent Engine daemon started.\033[0m"
+    else
+        print -u2 "\033[33m  ⚠ Intent Engine: could not start daemon.\033[0m"
+        INTENT_ENGINE_ENABLED=0
     fi
-}
-_intent_start_daemon
+fi
 
-# ─── Main intercept hook ──────────────────────────────────────────────────────
-preexec() {
+# ─── Intercept: runs BEFORE every command ─────────────────────────────────────
+_intent_preexec() {
     local cmd="$1"
 
-    # Skip if engine disabled, or if the command is the engine itself
+    # Skip conditions
     [[ "$INTENT_ENGINE_ENABLED" != "1" ]] && return
+    [[ "$_INTENT_INTERNAL" == "1" ]] && return
     [[ "$INTENT_ENGINE_SKIP" == "1" ]] && { unset INTENT_ENGINE_SKIP; return; }
-    [[ "$cmd" == *"intent"* ]] && return  # Don't analyze engine commands
+    [[ "$cmd" == *"intent"* ]] && return
+    [[ -z "$cmd" ]] && return
+
+    _INTENT_INTERNAL=1
 
     # Build JSON payload
     local payload
     payload=$(python3 -c "
 import json, os, sys
+cmd = sys.argv[1]
 print(json.dumps({
     'context': {
-        'command': sys.argv[1],
+        'command': cmd,
         'cwd': os.getcwd(),
         'user': os.environ.get('USER', ''),
-        'is_sudo': sys.argv[1].strip().startswith('sudo'),
+        'is_sudo': cmd.strip().startswith('sudo'),
         'shell': 'zsh',
         'session_id': os.environ.get('INTENT_SESSION_ID', ''),
     },
@@ -66,7 +83,7 @@ print(json.dumps({
 }))
 " "$cmd" 2>/dev/null)
 
-    [[ -z "$payload" ]] && return
+    [[ -z "$payload" ]] && { _INTENT_INTERNAL=0; return; }
 
     # Call daemon
     local response
@@ -76,7 +93,7 @@ print(json.dumps({
         -H "Content-Type: application/json" \
         -d "$payload" 2>/dev/null)
 
-    [[ -z "$response" ]] && return
+    [[ -z "$response" ]] && { _INTENT_INTERNAL=0; return; }
 
     # Check should_block
     local should_block
@@ -89,19 +106,16 @@ except: print('0')
 " 2>/dev/null)
 
     if [[ "$should_block" == "1" ]]; then
-        # Delegate to Python UI for the confirmation prompt
+        # Show confirmation UI
         local user_action
-        user_action=$(echo "$response" | python3 -m engine.ui.terminal_ui 2>/dev/null)
+        user_action=$(echo "$response" | python3 -m engine.ui.terminal_ui 2>/dev/tty)
 
         case "$user_action" in
             ABORT)
-                print -u2 "\n\033[31m✗ Command aborted.\033[0m"
-                # Prevent execution by clearing the command buffer
-                zle send-break 2>/dev/null
-                return 1
+                print -u2 "\n\033[31m  ✗ Command aborted by Intent Engine.\033[0m"
+                _INTENT_BLOCK=1
                 ;;
             USE_SAFER)
-                # Replace command with safer alternative — re-inject into readline
                 local safer
                 safer=$(echo "$response" | python3 -c "
 import json, sys
@@ -109,15 +123,37 @@ d = json.load(sys.stdin)
 print(d.get('verdict', {}).get('safer_alternative', '') or '')
 " 2>/dev/null)
                 if [[ -n "$safer" ]]; then
-                    print -u2 "\n\033[32m→ Running safer alternative: $safer\033[0m"
+                    print -u2 "\n\033[32m  → Running safer: $safer\033[0m"
+                    _INTENT_BLOCK=1
+                    _INTENT_INTERNAL=0
                     eval "$safer"
-                    return 1
+                    return
                 fi
+                _INTENT_BLOCK=1
                 ;;
             EXECUTE)
-                # User confirmed — let the command proceed normally
-                return 0
+                # User confirmed — let command proceed
                 ;;
         esac
     fi
+
+    _INTENT_INTERNAL=0
 }
+
+# ─── precmd: abort the command if _INTENT_BLOCK is set ────────────────────────
+_intent_precmd() {
+    if [[ "$_INTENT_BLOCK" == "1" ]]; then
+        _INTENT_BLOCK=0
+        # Kill the current command line by sending Ctrl-C to ZLE
+        if [[ -n "$ZLE_LINE" ]]; then
+            zle send-break 2>/dev/null
+        fi
+    fi
+}
+
+# ─── Register hooks ──────────────────────────────────────────────────────────
+autoload -Uz add-zsh-hook
+add-zsh-hook preexec _intent_preexec
+add-zsh-hook precmd _intent_precmd
+
+print -u2 "\033[2m  Intent Engine: shell hook active (session $INTENT_SESSION_ID)\033[0m"

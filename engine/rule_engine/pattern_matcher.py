@@ -220,6 +220,8 @@ class PatternMatcher:
 
         return None
 
+    # ── Tier 1: Full pattern library scan ─────────────────────────────────────
+
     def match(self, parsed: ParsedCommand, ctx: CommandContext) -> Optional[MatchResult]:
         """
         Scan Tier 1 pattern library with contextual weighting.

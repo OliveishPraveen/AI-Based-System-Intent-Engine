@@ -53,7 +53,14 @@ class LLMReasoner:
     async def initialize(self) -> None:
         """Create and warm up the LLM client."""
         self._client = await LLMClientFactory.create(self._config)
-        log.info("llm_reasoner_initialized")
+        if self._client is None:
+            log.warning(
+                "llm_unavailable",
+                note="No LLM provider reachable. AMBIGUOUS commands will use fallback verdict. "
+                     "Start Ollama (`ollama serve`) or configure a cloud provider to enable Tier 2."
+            )
+        else:
+            log.info("llm_reasoner_initialized")
 
     async def reason(
         self,
