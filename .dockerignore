@@ -1,0 +1,32 @@
+# Git
+.git/
+.gitignore
+.github/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Logs (generated at runtime inside container)
+*.log
+*.jsonl
+
+# Dev environment
+.venv/
+venv/
+.env
+
+# Editor
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store

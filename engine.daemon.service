@@ -1,0 +1,41 @@
+[Unit]
+Description=Intent Engine — AI-Based Shell Safety Daemon
+Documentation=https://github.com/Harshit7623/AI-Based-System-Intent-Engine
+# Start after the user session's graphical target is ready
+After=default.target
+
+[Service]
+Type=simple
+
+# The daemon binary and PYTHONPATH are set at install time by install.sh
+# which writes the correct absolute paths into the generated unit file.
+ExecStart=/usr/bin/python3 -m engine.daemon.server
+WorkingDirectory=%h/Documents/CDAC_Hackathon_Intent_Engine
+
+# Environment — PYTHONPATH and socket location
+Environment=PYTHONPATH=%h/Documents/CDAC_Hackathon_Intent_Engine
+Environment=INTENT_SOCKET=/tmp/intent_engine.sock
+
+# Restart policy: always restart on crash, with 5s back-off
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=60
+StartLimitBurst=3
+
+# Logging — routes daemon stdout/stderr to the standard audit log
+# (in addition to structlog's own file handler)
+StandardOutput=append:%h/.intent_engine/logs/daemon.log
+StandardError=append:%h/.intent_engine/logs/daemon.log
+
+# Resource limits — prevent the daemon from consuming runaway memory
+MemoryMax=256M
+CPUQuota=25%
+
+# Security hardening
+NoNewPrivileges=true
+PrivateTmp=false        # Needs /tmp for the Unix socket
+ProtectHome=read-only   # Daemon only reads repo; doesn't write to home
+ReadWritePaths=%h/.intent_engine/logs /tmp
+
+[Install]
+WantedBy=default.target

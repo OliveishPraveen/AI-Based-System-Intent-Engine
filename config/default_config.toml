@@ -27,7 +27,7 @@ dry_run = false
 [llm]
 # Primary provider: "ollama" (local) | "gemini" (API) | "openai" (API)
 provider = "ollama"
-model    = "llama3.2:3b"
+model    = "qwen2.5:7b"
 
 # Fallback if primary is unavailable
 fallback_provider = "gemini"

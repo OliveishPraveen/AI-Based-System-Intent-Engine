@@ -45,27 +45,77 @@ else
     _ok "Added to ~/.bashrc"
 fi
 
-# ─── 3. Zsh hook ──────────────────────────────────────────────────────────────
-_head "[3/5] Zsh hook → ~/.zshrc"
+# ─── 3. Zsh hooks ─────────────────────────────────────────────────────────────
+_head "[3/5] Zsh hooks → ~/.zshrc"
+HOOK_ZSH_COPILOT="$REPO_DIR/hooks/intent_autocomplete.zsh"
 if [[ -f "$HOME/.zshrc" ]]; then
+    # Safety hook
     if grep -qF "$HOOK_ZSH" "$HOME/.zshrc" 2>/dev/null; then
-        _ok "Zsh hook already present"
+        _ok "Zsh safety hook already present"
     else
         echo "" >> "$HOME/.zshrc"
         echo "# Intent Engine — shell safety hook" >> "$HOME/.zshrc"
         echo "source \"$HOOK_ZSH\"" >> "$HOME/.zshrc"
-        _ok "Added to ~/.zshrc"
+        _ok "Safety hook added to ~/.zshrc"
+    fi
+    # CLI Copilot (autocomplete) hook
+    if grep -qF "$HOOK_ZSH_COPILOT" "$HOME/.zshrc" 2>/dev/null; then
+        _ok "CLI Copilot hook already present"
+    else
+        echo "" >> "$HOME/.zshrc"
+        echo "# Intent Engine — CLI Copilot (inline autocomplete)" >> "$HOME/.zshrc"
+        echo "source \"$HOOK_ZSH_COPILOT\"" >> "$HOME/.zshrc"
+        _ok "CLI Copilot hook added to ~/.zshrc"
     fi
 else
-    _info "~/.zshrc not found — skipping zsh hook"
+    _info "~/.zshrc not found — skipping zsh hooks"
 fi
 
-# ─── 4. Start daemon ──────────────────────────────────────────────────────────
+# ─── 3b. Daemon watchdog (Zsh precmd) ────────────────────────────────────────
+# Adds a lightweight function that fires on each new prompt and restarts
+# the daemon if it has crashed. Zero UX impact — runs in background.
+WATCHDOG_MARKER="# Intent Engine — daemon watchdog"
+if [[ -f "$HOME/.zshrc" ]]; then
+    if grep -qF "$WATCHDOG_MARKER" "$HOME/.zshrc" 2>/dev/null; then
+        _ok "Daemon watchdog already present"
+    else
+        cat >> "$HOME/.zshrc" << WATCHDOG
+
+$WATCHDOG_MARKER
+_intent_watchdog() {
+    local pid_file="/tmp/intent_engine.pid"
+    local socket="/tmp/intent_engine.sock"
+    [[ -S "\$socket" ]] && return  # socket exists → daemon is up
+    local pid
+    pid=\$(cat "\$pid_file" 2>/dev/null || true)
+    if [[ -n "\$pid" ]] && kill -0 "\$pid" 2>/dev/null; then
+        return  # PID alive but socket missing — still starting
+    fi
+    # Daemon is gone — restart silently in background
+    local repo_dir="${REPO_DIR}"
+    if [[ -f "\$repo_dir/engine/daemon/server.py" ]]; then
+        (PYTHONPATH="\$repo_dir" python3 -m engine.daemon.server </dev/null &>/dev/null &)
+    fi
+}
+# Fire watchdog on every new prompt
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _intent_watchdog
+WATCHDOG
+        _ok "Daemon watchdog added to ~/.zshrc"
+    fi
+fi
+
+
+# ─── 4. Start daemon (systemd-first, fall back to background process) ─────────
 _head "[4/5] Starting daemon"
 SOCKET="/tmp/intent_engine.sock"
 PID_FILE="/tmp/intent_engine.pid"
+SERVICE_NAME="engine.daemon"
+SYSTEMD_UNIT_DIR="$HOME/.config/systemd/user"
+SRC_UNIT="$REPO_DIR/engine.daemon.service"
+DST_UNIT="$SYSTEMD_UNIT_DIR/$SERVICE_NAME.service"
 
-# Kill any stale daemon
+# Kill any stale daemon before starting fresh
 if [[ -f "$PID_FILE" ]]; then
     OLD_PID=$(cat "$PID_FILE" 2>/dev/null || true)
     if [[ -n "$OLD_PID" ]] && kill -0 "$OLD_PID" 2>/dev/null; then
@@ -75,22 +125,50 @@ if [[ -f "$PID_FILE" ]]; then
     rm -f "$PID_FILE" "$SOCKET"
 fi
 
-PYTHONPATH="$REPO_DIR" python3 -m engine.daemon.server &
-DAEMON_PID=$!
-disown "$DAEMON_PID" 2>/dev/null || true
+USED_SYSTEMD=0
 
-# Wait for socket
-for i in $(seq 1 8); do
-    if [[ -S "$SOCKET" ]]; then break; fi
-    sleep 0.5
-done
+# ── Attempt systemd user session ──────────────────────────────────────────────
+if systemctl --user status > /dev/null 2>&1; then
+    mkdir -p "$SYSTEMD_UNIT_DIR"
 
-if curl --silent --max-time 1 --unix-socket "$SOCKET" http://localhost/health >/dev/null 2>&1; then
-    _ok "Daemon running (PID $DAEMON_PID)"
-    _info "Logs → ~/.intent_engine/logs/daemon.log"
-    _info "Audit → ~/.intent_engine/logs/audit.jsonl"
-else
-    _warn "Daemon did not start — check logs at ~/.intent_engine/logs/daemon.log"
+    # Generate a unit file with the correct absolute REPO_DIR baked in
+    sed \
+        -e "s|%h/Documents/CDAC_Hackathon_Intent_Engine|$REPO_DIR|g" \
+        -e "s|WorkingDirectory=.*|WorkingDirectory=$REPO_DIR|" \
+        -e "s|Environment=PYTHONPATH=.*|Environment=PYTHONPATH=$REPO_DIR|" \
+        "$SRC_UNIT" > "$DST_UNIT"
+
+    systemctl --user daemon-reload
+    if systemctl --user enable --now "$SERVICE_NAME" 2>/dev/null; then
+        sleep 2
+        if curl --silent --max-time 1 --unix-socket "$SOCKET" http://localhost/health > /dev/null 2>&1; then
+            _ok "Daemon running via systemd (Restart=always, CPU≤25%, RAM≤256M)"
+            _info "Manage: systemctl --user {start|stop|status|restart} $SERVICE_NAME"
+            _info "Logs  → ~/.intent_engine/logs/daemon.log"
+            _info "Audit → ~/.intent_engine/logs/audit.jsonl"
+            USED_SYSTEMD=1
+        fi
+    fi
+fi
+
+# ── Fall back to background process if systemd unavailable ────────────────────
+if [[ "$USED_SYSTEMD" -eq 0 ]]; then
+    _info "systemd --user not available — using background process"
+    PYTHONPATH="$REPO_DIR" python3 -m engine.daemon.server &
+    DAEMON_PID=$!
+    disown "$DAEMON_PID" 2>/dev/null || true
+
+    for i in $(seq 1 8); do
+        [[ -S "$SOCKET" ]] && break
+        sleep 0.5
+    done
+
+    if curl --silent --max-time 1 --unix-socket "$SOCKET" http://localhost/health > /dev/null 2>&1; then
+        _ok "Daemon running as background process (PID $DAEMON_PID)"
+        _info "Logs → ~/.intent_engine/logs/daemon.log"
+    else
+        _warn "Daemon did not start — check ~/.intent_engine/logs/daemon.log"
+    fi
 fi
 
 # ─── 5. Verify ────────────────────────────────────────────────────────────────

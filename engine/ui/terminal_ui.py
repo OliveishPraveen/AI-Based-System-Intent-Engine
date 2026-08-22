@@ -93,6 +93,7 @@ def render_prompt(response: dict) -> str:
     v       = response.get("verdict", {})
     risk    = v.get("risk_level", "UNKNOWN")
     conf    = v.get("confidence", 0.0)
+    intent  = v.get("intent", "")          # Semantic intent from LLM (PDF Section 3)
     impact  = v.get("impact_summary", "Unknown impact.")
     reason  = v.get("reasoning", "")
     safer   = v.get("safer_alternative")
@@ -112,6 +113,13 @@ def render_prompt(response: dict) -> str:
 
     # ── Risk bar ───────────────────────────────────────────────────────────────
     err.write(f"  {G1}│{R}  {G3}risk{R}    {accent}{bar}{R}  {G4}{risk}{R}\n")
+
+    # ── Intent (from LLM semantic reasoning — PDF Section 3) ─────────────────
+    if intent:
+        intent_lines = _wrap(intent, 46)
+        for i, line in enumerate(intent_lines[:2]):
+            label = f"{G3}intent{R}" if i == 0 else "      "
+            err.write(f"  {G1}│{R}  {label}  {G5}{line}{R}\n")
 
     # ── Impact ─────────────────────────────────────────────────────────────────
     impact_lines = _wrap(impact, 46)

@@ -104,3 +104,24 @@ class AuditLogEntry(BaseModel):
     verdict_tier: str
     user_action: Optional[UserAction]
     safer_alternative_used: bool = False
+
+
+# ─── Autocomplete Models (CLI Copilot feature) ────────────────────────────────
+
+class AutocompleteRequest(BaseModel):
+    """Partial command buffer sent from the shell hook on every debounce tick."""
+    partial: str = Field(..., description="Partial command typed so far")
+    cwd: str = Field("", description="Current working directory for context")
+
+
+class AutocompleteItem(BaseModel):
+    """A single completion suggestion."""
+    cmd: str = Field(..., description="The complete command to insert")
+    desc: str = Field(..., description="Short description (max ~6 words)")
+
+
+class AutocompleteResponse(BaseModel):
+    """Response from the /autocomplete endpoint."""
+    completions: list[AutocompleteItem]
+    source: str = Field("local", description="'local' | 'cache' | 'llm' — for debugging")
+    latency_ms: float = Field(0.0)
