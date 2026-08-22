@@ -43,7 +43,7 @@ _SAFE_READONLY_COMMANDS = {
 _SAFE_TEMP_PREFIXES = ("/tmp", "/var/tmp", "./tmp", "tmp/")
 
 _SENSITIVE_FILES_PATTERN = re.compile(
-    r"(?:/etc/(?:shadow|gshadow|sudoers|master\.passwd)|\.ssh/id_(?:rsa|ed25519|ecdsa|dsa)|/proc/kcore|/dev/(?:mem|kmem))",
+    r"(?:/etc/(?:shadow|gshadow|sudoers|master\.passwd|passwd)|\.ssh/id_(?:rsa|ed25519|ecdsa|dsa)|/proc/kcore|/dev/(?:mem|kmem))",
     re.IGNORECASE,
 )
 

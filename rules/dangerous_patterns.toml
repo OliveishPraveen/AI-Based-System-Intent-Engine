@@ -285,7 +285,7 @@ safer_explanation  = "Manage administrative duties via sudo privileges rather th
 [[patterns]]
 name       = "iptables_flush"
 tier       = 1
-risk_level = "HIGH"
+risk_level = "MEDIUM"
 category   = "network"
 commands   = ["iptables", "ip6tables", "nft"]
 regex      = '\b(?:iptables|ip6tables)\s+.*-(?:F|flush)\b|\bnft\s+flush\s+ruleset\b'
@@ -297,7 +297,7 @@ safer_explanation  = "Back up the current ruleset and inspect specific chains be
 [[patterns]]
 name       = "firewall_disable"
 tier       = 1
-risk_level = "HIGH"
+risk_level = "MEDIUM"
 category   = "network"
 commands   = ["ufw", "systemctl", "service"]
 regex      = '(?:\bufw\s+disable\b|\bsystemctl\s+(?:stop|disable|mask)\s+firewalld\b|\bservice\s+firewalld\s+stop\b)'
@@ -345,6 +345,18 @@ safer_explanation  = "Use encrypted SSH tunnels and key authentication for remot
 # ─────────────────────────────────────────────────────────────────────────────
 # TIER 1: MEDIUM — Moderate Risk & Sensitive Information Access
 # ─────────────────────────────────────────────────────────────────────────────
+
+[[patterns]]
+name       = "cat_passwd"
+tier       = 1
+risk_level = "MEDIUM"
+category   = "exposure"
+commands   = ["cat", "less", "more", "head", "tail", "nl"]
+regex      = '\b(?:cat|less|more|head|tail|nl)\s+/etc/passwd(?:\s|$)'
+reasoning_template = "Reading /etc/passwd lists all user accounts and their UIDs. Combined with /etc/shadow, this enables targeted brute-force or enumeration attacks against valid user accounts."
+impact_template    = "Exposes the system user list (usernames, UIDs, home dirs, shells)."
+safer_alternative  = "getent passwd {username}"
+safer_explanation  = "Query specific account details without listing every user on the system."
 
 [[patterns]]
 name       = "cat_shadow"
@@ -417,3 +429,109 @@ reasoning_template = "Modifying shell resource limits with ulimit (such as maxim
 impact_template    = "Modifies process or resource caps for the shell session, which may freeze process creation or cause instability."
 safer_alternative  = "ulimit -a # Inspect current limits before modifying"
 safer_explanation  = "Use 'ulimit -a' to inspect soft and hard resource limits before applying adjustments."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 0: NEW — Scripting & Injection Vectors
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[patterns]]
+name       = "python_shell_injection"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "execution"
+commands   = ["python3", "python", "python2"]
+regex      = '\bpython[23]?\s+.*-[cC]\s+.*(?:os\.system|subprocess\.|__import__.*os|exec\(|eval\(|open\s*\(/etc/(?:passwd|shadow)|shutil\.rmtree)'
+reasoning_template = "Python one-liner executing system commands or filesystem operations. This pattern bypasses shell monitoring because the dangerous operation is embedded inside an interpreter string — the outer command is 'python3', not 'rm' or 'curl'."
+impact_summary    = "Executes system-level operations hidden inside a Python interpreter string."
+impact_template    = "May delete files, read credentials, or execute remote code with no shell-level visibility."
+safer_alternative  = "python3 script.py  # Write to a named file for auditability"
+safer_explanation  = "Named scripts are inspectable, versionable, and auditable — inline -c strings are not."
+
+[[patterns]]
+name       = "perl_shell_injection"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "execution"
+commands   = ["perl"]
+regex      = '\bperl\s+.*-[eE]\s+.*(?:system\s*\(|exec\s*\(|unlink\s*\(|`|qx\{|open\s*\(.*[|>])'
+reasoning_template = "Perl one-liner executing system commands or filesystem operations via -e. Perl's system(), exec(), backtick execution, and file write capabilities allow arbitrary OS operations hidden from shell-level monitoring."
+impact_template    = "Executes OS-level operations embedded in a Perl interpreter string with no shell-level audit trail."
+safer_alternative  = "perl script.pl  # Write to a named file"
+safer_explanation  = "Named Perl scripts are inspectable and auditable."
+
+[[patterns]]
+name       = "xargs_bulk_delete"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "destruction"
+commands   = ["xargs"]
+regex      = '\bxargs\s+.*\brm\s+.*-[a-zA-Z]*[rf][a-zA-Z]*|\bxargs\b.*\brm\b.*-[a-zA-Z]*[rf]'
+reasoning_template = "xargs piping input into 'rm -rf'. xargs will pass every line of stdin as an argument to rm, potentially deleting arbitrarily large numbers of files or entire directory trees depending on what was piped in."
+impact_template    = "May delete every file or directory output by the piped command."
+safer_alternative  = "xargs -I{} echo {} # Print targets first, then decide"
+safer_explanation  = "Use echo to preview what xargs would pass to rm, then run the deletion only after confirming the list."
+
+[[patterns]]
+name       = "network_exfil_sensitive"
+tier       = 0
+risk_level = "CRITICAL"
+category   = "exposure"
+commands   = ["nc", "ncat", "netcat", "socat", "curl", "wget"]
+regex      = '(?:\bnc(?:at)?\s+.*<\s*/etc/(?:shadow|passwd|sudoers)|\bsocat\s+.*(?:shadow|sudoers|ssh.*id_rsa)|\bcat\s+/etc/(?:shadow|passwd)\s*\|\s*(?:nc|curl|wget|socat)\b)'
+reasoning_template = "Network transmission of sensitive credential or privilege files (/etc/shadow, /etc/passwd, sudoers, SSH private keys). These files contain hashed or cleartext authentication secrets that allow system compromise if intercepted."
+impact_template    = "Transmits system authentication credentials over the network."
+safer_alternative  = "sudo getent passwd {user}  # Query account info without exposing all hashes"
+safer_explanation  = "Never transmit /etc/shadow or private key material over unencrypted channels."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TIER 1: NEW — Additional High-Risk Patterns
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[patterns]]
+name       = "history_wipe_unset"
+tier       = 1
+risk_level = "HIGH"
+category   = "tampering"
+commands   = []
+regex      = '(?:unset\s+HISTFILE\b|export\s+HISTFILE=/dev/null\b|HISTFILE=/dev/null\b|export\s+HISTSIZE=0\b|HISTSIZE=0\b)'
+reasoning_template = "Disabling shell history recording by unsetting HISTFILE or setting it to /dev/null. This technique is used to prevent audit trails from capturing commands executed in the session — a standard OPSEC tactic in post-exploitation."
+impact_template    = "Disables shell history recording for the current session, removing forensic audit capability."
+safer_alternative  = ""
+safer_explanation  = "Shell history is an essential security audit trail. Disabling it is a red flag for malicious activity."
+
+[[patterns]]
+name       = "env_ld_preload_injection"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = []
+regex      = '(?:LD_PRELOAD\s*=\s*\S+|LD_LIBRARY_PATH\s*=\s*\S+.*sudo|export\s+LD_PRELOAD\s*=)'
+reasoning_template = "Setting LD_PRELOAD injects a shared library into every subsequently executed process. This is a primary technique for privilege escalation: a malicious .so can intercept system calls, bypass authentication, or hook credentials."
+impact_template    = "Injects a shared library into subsequent processes, potentially bypassing authentication or escalating privileges."
+safer_alternative  = "ldd $(which sudo)  # Inspect normal library linkage"
+safer_explanation  = "Audit which libraries are legitimately linked to system binaries rather than overriding them."
+
+[[patterns]]
+name       = "rm_git_directory"
+tier       = 1
+risk_level = "HIGH"
+category   = "destruction"
+commands   = ["rm"]
+regex      = '\brm\s+.*-[a-zA-Z]*[rf][a-zA-Z]*\s+.*\.git(?:\s|/|$)'
+reasoning_template = "Recursive deletion of a .git directory removes the entire version control history, all branches, tags, stashes, and the reflog. This is irreversible without a remote backup."
+impact_template    = "Permanently destroys the entire Git version history for the repository."
+safer_alternative  = "git remote -v && git push  # Back up to remote first"
+safer_explanation  = "Push all local commits to a remote before destroying the local .git directory."
+
+[[patterns]]
+name       = "suid_setuid_binary"
+tier       = 1
+risk_level = "HIGH"
+category   = "privilege"
+commands   = ["chmod", "install"]
+regex      = '\bchmod\s+.*(?:u\+s|4[0-9]{3}|6[0-9]{3})\s+(?!.*\.sh\b).*(?:/usr/|/bin/|/sbin/|/opt/)'
+reasoning_template = "Setting the SUID bit on a system binary allows it to run with the file owner's privileges (typically root) regardless of who executes it. Adding SUID to scripts or custom binaries is a classic privilege escalation technique."
+impact_template    = "Makes the target binary executable as root by any user on the system."
+safer_alternative  = "sudo -l  # Review what the user is already authorized to do"
+safer_explanation  = "Use sudoers rules for targeted privilege delegation instead of creating new SUID binaries."
+

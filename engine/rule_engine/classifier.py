@@ -14,6 +14,7 @@ import structlog
 
 from engine.models import CommandContext, RiskLevel, Verdict
 from engine.parser.command_parser import ParsedCommand
+from engine.rule_engine.obfuscation_detector import ObfuscationDetector
 from engine.rule_engine.pattern_loader import PatternLoader
 from engine.rule_engine.pattern_matcher import PatternMatcher
 from engine.rule_engine.verdict_builder import VerdictBuilder
@@ -36,6 +37,7 @@ class RuleEngineClassifier:
         self._config = config or {}
         self._loader = PatternLoader()
         self._matcher: Optional[PatternMatcher] = None
+        self._obfuscation_detector = ObfuscationDetector()  # Pre-Tier-0 evasion scanner
         self._ambiguous_threshold: float = float(
             self._config.get("safety", {}).get("ambiguous_threshold", _DEFAULT_AMBIGUOUS_THRESHOLD)
         )
@@ -72,6 +74,20 @@ class RuleEngineClassifier:
                 raise RuntimeError("Failed to initialize PatternMatcher.")
 
         t0 = time.perf_counter()
+
+        # ── Pre-Tier 0: Obfuscation / Evasion Scan ────────────────────────────
+        # Catches eval+base64, hex-decode pipelines, HISTFILE wipes, etc.
+        # Must run BEFORE structural checks so encoded payloads don't slip through.
+        obfusc_verdict = self._obfuscation_detector.detect(parsed.raw)
+        if obfusc_verdict is not None:
+            obfusc_verdict.latency_ms = round((time.perf_counter() - t0) * 1000, 2)
+            log.info(
+                "obfuscation_detected",
+                command=parsed.raw[:50],
+                pattern=obfusc_verdict.matched_pattern,
+                latency_ms=obfusc_verdict.latency_ms,
+            )
+            return obfusc_verdict
 
         # ── Tier 0: Fast-Path Immediate CRITICAL Checks (< 1ms) ───────────────
         tier0_verdict = self._matcher.check_tier0(parsed)
