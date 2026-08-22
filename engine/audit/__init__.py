@@ -22,6 +22,10 @@ Format per line (newline-delimited JSON):
 
 The log is append-only and never read by the engine itself.
 It exists purely as a human-readable security audit trail.
+
+OPTIMISATION (Priority 6): Log rotation — audit.jsonl is automatically
+rotated to audit.jsonl.1 when it exceeds _MAX_LOG_BYTES (10MB).
+Only 3 rotated files are kept; older ones are deleted.
 """
 
 from __future__ import annotations
@@ -32,8 +36,30 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-_LOG_DIR  = Path.home() / ".intent_engine" / "logs"
-_LOG_FILE = _LOG_DIR / "audit.jsonl"
+_LOG_DIR   = Path.home() / ".intent_engine" / "logs"
+_LOG_FILE  = _LOG_DIR / "audit.jsonl"
+_MAX_LOG_BYTES = 10 * 1024 * 1024   # 10 MB
+_MAX_ROTATIONS = 3                  # Keep .1 .2 .3 only
+
+
+def _rotate_if_needed() -> None:
+    """Rotate audit.jsonl → audit.jsonl.1 → .2 → .3 when file exceeds 10MB."""
+    try:
+        if not _LOG_FILE.exists() or _LOG_FILE.stat().st_size < _MAX_LOG_BYTES:
+            return
+        # Shift existing rotations: .2 → .3, .1 → .2
+        for n in range(_MAX_ROTATIONS - 1, 0, -1):
+            old = _LOG_DIR / f"audit.jsonl.{n}"
+            new = _LOG_DIR / f"audit.jsonl.{n + 1}"
+            if old.exists():
+                if n + 1 > _MAX_ROTATIONS:
+                    old.unlink()     # Delete overflow rotation
+                else:
+                    old.rename(new)
+        # Rotate current → .1
+        _LOG_FILE.rename(_LOG_DIR / "audit.jsonl.1")
+    except Exception:
+        pass  # Rotation failure must never disrupt the user's terminal
 
 
 def log_decision(
@@ -52,9 +78,11 @@ def log_decision(
     """
     Append one audit entry to audit.jsonl.
     Silently no-ops on any I/O error so it never breaks the shell hook.
+    Auto-rotates the log file if it exceeds 10MB.
     """
     try:
         _LOG_DIR.mkdir(parents=True, exist_ok=True)
+        _rotate_if_needed()
         entry: dict[str, Any] = {
             "timestamp":  datetime.now(tz=timezone.utc).astimezone().isoformat(),
             "command":    command,

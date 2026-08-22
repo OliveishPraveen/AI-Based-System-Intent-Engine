@@ -76,3 +76,37 @@ RULE ENGINE NOTE: This command was flagged as AMBIGUOUS by the rule engine
 with confidence {rule_hint.confidence:.2f}. Reasoning: {rule_hint.reasoning}
 
 Provide your JSON safety assessment:"""
+
+    def build_reflection_prompt(
+        self,
+        parsed: ParsedCommand,
+        first_response: object,   # ParsedLLMResponse
+    ) -> str:
+        """
+        Reflection prompt — given the first low-confidence response, ask the LLM
+        to critique its own reasoning and produce a more decisive verdict.
+        Only called when confidence < reflection_threshold (default 0.65).
+        """
+        return f"""You previously analyzed this command:
+
+COMMAND: {parsed.raw}
+
+Your initial assessment was:
+  risk_level: {getattr(first_response, 'risk_level', 'UNKNOWN')}
+  confidence: {getattr(first_response, 'confidence', 0.0):.2f}
+  reasoning:  {getattr(first_response, 'reasoning', '')[:300]}
+
+Your confidence was LOW ({getattr(first_response, 'confidence', 0.0):.2f}). Reconsider carefully:
+- What is the WORST CASE if this command executes as written?
+- Are there filesystem paths, flags, or pipe segments that escalate risk?
+- Is this command commonly used maliciously, or is it a legitimate admin task?
+
+Revise your assessment with higher confidence. Return ONLY valid JSON:
+{{
+  "risk_level": "SAFE" | "LOW" | "MEDIUM" | "HIGH" | "CRITICAL",
+  "confidence": <float 0.7-1.0>,
+  "reasoning": "<revised technical explanation>",
+  "impact_summary": "<one sentence plain-English impact>",
+  "safer_alternative": "<safer command or null>"
+}}"""
+

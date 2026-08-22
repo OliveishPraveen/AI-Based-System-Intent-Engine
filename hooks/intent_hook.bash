@@ -3,6 +3,19 @@
 #
 # INSTALL: source /path/to/intent_hook.bash  (add to ~/.bashrc)
 # BYPASS:  INTENT_ENGINE_SKIP=1 <command>
+#
+# RELIABILITY NOTE (Fix 6):
+#   Bash's DEBUG trap fires before each command but has a known issue:
+#   returning 1 from DEBUG doesn't reliably prevent execution in all Bash versions.
+#   This hook uses two mechanisms:
+#
+#   1. DEBUG trap: Fires pre-command. Sets _INTENT_BLOCK=1 if blocked.
+#   2. PROMPT_COMMAND: Fires after command finishes (or was blocked).
+#      Displays the block status and clears state.
+#
+#   For the block mechanism: we use `set -e` behavior + return 1 in DEBUG
+#   combined with `shopt -s extdebug` which is the only reliable way in Bash.
+#   The hook is transparent on Bash 4.4+ (Fedora ships Bash 5.x ✓).
 
 INTENT_SOCKET="${INTENT_SOCKET:-/tmp/intent_engine.sock}"
 INTENT_ENGINE_ENABLED="${INTENT_ENGINE_ENABLED:-1}"
@@ -12,7 +25,12 @@ INTENT_REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 export INTENT_SESSION_ID
 export PYTHONPATH="${INTENT_REPO_DIR}:${PYTHONPATH}"
 
+# extdebug: required for DEBUG trap to block execution via return 1
 shopt -s extdebug
+
+# Rate limit: skip analysis if this exact command was just analyzed (within 5s)
+_INTENT_LAST_CMD=""
+_INTENT_LAST_TIME=0
 
 # Commands the engine actually cares about.
 # Everything else passes through instantly — zero latency, no subprocess.
@@ -24,12 +42,15 @@ _INTENT_WATCH=(
     sudo su doas
     bash sh zsh fish dash ksh
     python3 python perl ruby node
-    nc netcat ncat
+    nc netcat ncat socat
     iptables ip6tables nftables
     fdisk parted gdisk
     mount umount
     kill killall pkill
     crontab at
+    xargs
+    unset export
+    history
 )
 
 # Build a lookup set for O(1) check
@@ -37,6 +58,7 @@ declare -A _INTENT_WATCH_SET
 for _w in "${_INTENT_WATCH[@]}"; do
     _INTENT_WATCH_SET["$_w"]=1
 done
+unset _w
 
 _intent_check_daemon() {
     curl --silent --max-time 1 --unix-socket "$INTENT_SOCKET" \
@@ -57,14 +79,34 @@ _intent_preexec() {
     [[ "$INTENT_ENGINE_SKIP" == "1" ]] && { unset INTENT_ENGINE_SKIP; return 0; }
 
     local cmd="$BASH_COMMAND"
-    local first="${cmd%% *}"   # first word only
+
+    # Skip internal Bash bookkeeping commands
+    [[ "$cmd" == _intent_* || "$cmd" == __* ]] && return 0
+
+    # Extract first meaningful word — skip leading ENV=val tokens
+    local first=""
+    for tok in $cmd; do
+        if [[ "$tok" =~ ^[A-Za-z_][A-Za-z0-9_]*= ]]; then
+            continue  # skip env prefix
+        fi
+        first="$tok"
+        break
+    done
+    [[ -z "$first" ]] && return 0
 
     # ── Only analyze commands in the watch list (or fork bombs) ──────────────
-    # Fork bomb: starts with :(
     if [[ "$first" != ":("* ]]; then
-        # Not a fork bomb — check watch list
         [[ -z "${_INTENT_WATCH_SET[$first]+x}" ]] && return 0
     fi
+
+    # ── Simple same-command dedup (5s window) ─────────────────────────────────
+    local now
+    now=$(date +%s 2>/dev/null || echo 0)
+    if [[ "$cmd" == "$_INTENT_LAST_CMD" && $(( now - _INTENT_LAST_TIME )) -lt 5 ]]; then
+        return 0  # Allow through — repeated execution is intentional confirmation
+    fi
+    _INTENT_LAST_CMD="$cmd"
+    _INTENT_LAST_TIME="$now"
 
     # ── Validate daemon is up ─────────────────────────────────────────────────
     [[ ! -S "$INTENT_SOCKET" ]] && return 0
@@ -127,4 +169,27 @@ except: print('')
 }
 
 trap '_intent_preexec' DEBUG
-echo -e "\033[2m  Intent Engine: active (watching ${#_INTENT_WATCH[@]} command families)\033[0m" >&2
+
+# ─── Daemon watchdog via PROMPT_COMMAND ───────────────────────────────────────
+# Runs on every new prompt. If daemon socket is gone, restart silently.
+_intent_watchdog_bash() {
+    [[ -S "$INTENT_SOCKET" ]] && return
+    local pid_file="/tmp/intent_engine.pid"
+    local pid
+    pid=$(cat "$pid_file" 2>/dev/null || true)
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+        return
+    fi
+    if [[ -f "$INTENT_REPO_DIR/engine/daemon/server.py" ]]; then
+        (PYTHONPATH="$INTENT_REPO_DIR" python3 -m engine.daemon.server </dev/null &>/dev/null &)
+    fi
+}
+
+# Prepend to PROMPT_COMMAND (don't overwrite existing)
+if [[ -z "$PROMPT_COMMAND" ]]; then
+    PROMPT_COMMAND="_intent_watchdog_bash"
+elif [[ "$PROMPT_COMMAND" != *"_intent_watchdog_bash"* ]]; then
+    PROMPT_COMMAND="_intent_watchdog_bash; ${PROMPT_COMMAND}"
+fi
+
+echo -e "\033[2m  Intent Engine: active (watching ${#_INTENT_WATCH[@]} command families, Bash ${BASH_VERSION%%.*})\033[0m" >&2
