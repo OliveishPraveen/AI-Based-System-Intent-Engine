@@ -4,10 +4,10 @@ from pydantic import BaseModel, Field
 
 
 class RiskLevel(str, Enum):
-    SAFE = "SAFE"
-    LOW = "LOW"
-    MEDIUM = "MEDIUM"
-    HIGH = "HIGH"
+    SAFE     = "SAFE"
+    LOW      = "LOW"
+    MEDIUM   = "MEDIUM"
+    HIGH     = "HIGH"
     CRITICAL = "CRITICAL"
 
 
@@ -15,8 +15,8 @@ class IntentResult(BaseModel):
     """
     Final application-level semantic analysis result.
 
-    This is produced by the IntentReasoner after receiving,
-    validating, and processing the LLM response.
+    Produced by the IntentReasoner after receiving, validating,
+    and processing the LLM response.
     """
 
     command: str = Field(min_length=1)

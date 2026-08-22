@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 class AlternativeStatus(str, Enum):
     GENERATED = "GENERATED"
     VALIDATED = "VALIDATED"
-    REJECTED = "REJECTED"
+    REJECTED  = "REJECTED"
 
 
 class AlternativeResult(BaseModel):

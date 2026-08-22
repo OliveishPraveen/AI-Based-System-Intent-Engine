@@ -3,10 +3,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class AlternativeTemplate:
-    """
-    Defines a safer strategy for a class of operations.
-    """
-
+    """Defines a safer strategy for a class of operations."""
     name: str
     description: str
     example_command: str

@@ -1,20 +1,19 @@
 from engine.contracts.intent_result import IntentResult
 from engine.contracts.alternative_result import AlternativeResult
-
 from engine.alternatives.templates import ALTERNATIVE_TEMPLATES
 
 
 class AlternativeGenerator:
     """
     Generates safer command alternatives from an IntentResult.
+    Returns None if no known safe strategy exists for the command.
     """
 
-    def generate(self, result: IntentResult) -> AlternativeResult:
-        """
-        Generate a safer alternative based on the semantic intent.
-        """
-
-        strategy = self._select_strategy(result)
+    def generate(self, result: IntentResult) -> AlternativeResult | None:
+        try:
+            strategy = self._select_strategy(result)
+        except ValueError:
+            return None
 
         template = ALTERNATIVE_TEMPLATES[strategy]
 
@@ -27,11 +26,6 @@ class AlternativeGenerator:
         )
 
     def _select_strategy(self, result: IntentResult) -> str:
-        """
-        Select the safest available strategy based on the
-        semantic meaning of the command.
-        """
-
         text = (
             result.command
             + " "
@@ -42,7 +36,6 @@ class AlternativeGenerator:
             + result.explanation
         ).lower()
 
-        # File deletion
         if (
             "-delete" in text
             or "delete files" in text
@@ -51,7 +44,6 @@ class AlternativeGenerator:
         ):
             return "file_deletion"
 
-        # Directory removal
         if (
             "rm -rf" in text
             or "remove directory" in text
@@ -60,7 +52,6 @@ class AlternativeGenerator:
         ):
             return "directory_deletion"
 
-        # Permission modification
         if (
             "chmod" in text
             or "permission" in text
@@ -68,7 +59,6 @@ class AlternativeGenerator:
         ):
             return "permission_change"
 
-        # Disk operations
         if (
             "mkfs" in text
             or "format disk" in text
@@ -77,8 +67,6 @@ class AlternativeGenerator:
         ):
             return "disk_operation"
 
-        # No known safer strategy.
         raise ValueError(
-            "No safe alternative strategy is available "
-            "for this command."
+            "No safe alternative strategy is available for this command."
         )

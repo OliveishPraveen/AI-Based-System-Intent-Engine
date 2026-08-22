@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 
 class RuleClassification(str, Enum):
-    SAFE = "SAFE"
+    SAFE      = "SAFE"
     DANGEROUS = "DANGEROUS"
     AMBIGUOUS = "AMBIGUOUS"
 
@@ -14,7 +14,7 @@ class RuleResult(BaseModel):
     """
     Result produced by the deterministic rule engine.
 
-    This is the input contract between Praveen's rule engine
+    Input contract between Praveen's rule engine
     and Vansh's Tier-2 reasoning engine.
     """
 
