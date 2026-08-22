@@ -26,14 +26,14 @@ dry_run = false
 
 [llm]
 # Primary provider: "ollama" (local) | "gemini" (API) | "openai" (API)
-provider = "ollama"
-model    = "qwen2.5:7b"
+provider = "gemini"
+model    = "gemini-3.6-flash"
 
 # Fallback if primary is unavailable
 fallback_provider = "gemini"
 
 # Hard timeout for LLM response — exceed this and the engine uses fallback verdict
-timeout_s = 3.0
+timeout_s = 10.0
 
 # Ollama settings (when provider = "ollama")
 ollama_url = "http://localhost:11434"
@@ -41,7 +41,7 @@ ollama_url = "http://localhost:11434"
 # API keys — set via environment variables, NOT here
 # INTENT_GEMINI_API_KEY=...
 # INTENT_OPENAI_API_KEY=...
-gemini_model = "gemini-2.0-flash"
+gemini_model = "gemini-3.6-flash"
 openai_model = "gpt-4o-mini"
 
 [ui]

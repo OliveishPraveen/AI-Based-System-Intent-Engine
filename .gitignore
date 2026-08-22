@@ -56,3 +56,4 @@ logs/
 # === Build artifacts ===
 *.tar.gz
 *.zip
+.env

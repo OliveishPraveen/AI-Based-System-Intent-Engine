@@ -31,7 +31,7 @@ import structlog
 log = structlog.get_logger()
 
 _OLLAMA_BASE = "http://localhost:11434"
-_AUTOCOMPLETE_TIMEOUT_S = 0.8   # 800ms hard cap — faster than the safety engine's 3s
+_AUTOCOMPLETE_TIMEOUT_S = 2.0    # 2s cap — enough for warm LLM on CPU
 _MIN_PREFIX_LEN = 3              # Don't fire LLM for 1-2 char prefixes
 _CACHE_MAX_SIZE = 64             # LRU eviction after 64 unique prefixes
 
@@ -39,85 +39,402 @@ _CACHE_MAX_SIZE = 64             # LRU eviction after 64 unique prefixes
 # Covers the 20 most common command families. Shown instantly with 0ms latency.
 # Key = first word of the partial command.
 _LOCAL_DICT: dict[str, list[tuple[str, str]]] = {
-    "git": [
-        ("git commit -m \"\"",              "Commit staged changes with message"),
-        ("git push origin",                 "Push current branch to remote"),
-        ("git pull --rebase",               "Fetch + rebase on upstream"),
-        ("git rebase -i HEAD~3",            "Interactively rebase last 3 commits"),
-        ("git stash push -m \"\"",          "Stash uncommitted changes with label"),
-        ("git log --oneline --graph",       "Compact visual commit history"),
-        ("git checkout -b ",                "Create and switch to new branch"),
-        ("git diff --staged",               "Show staged changes before commit"),
+    # ── File Operations ───────────────────────────────────────────────────────
+    "ls": [
+        ("ls -la",                          "List all files with details"),
+        ("ls -lh",                          "List files with human sizes"),
+        ("ls -lt",                          "List files sorted by time"),
+        ("ls -R",                           "List files recursively"),
     ],
-    "docker": [
-        ("docker ps -a",                    "List all containers (running + stopped)"),
-        ("docker build -t  .",              "Build image from current Dockerfile"),
-        ("docker run -it --rm ",            "Run container interactively, auto-remove"),
-        ("docker-compose up -d",            "Start all services in background"),
-        ("docker exec -it  bash",           "Open shell in running container"),
-        ("docker logs -f ",                 "Follow container log output"),
+    "cat": [
+        ("cat ",                            "Display file contents"),
+        ("cat -n ",                         "Display with line numbers"),
     ],
-    "systemctl": [
-        ("systemctl status ",               "Show service status and recent logs"),
-        ("systemctl restart ",              "Restart a system service"),
-        ("systemctl enable --now ",         "Enable and immediately start a service"),
-        ("systemctl list-units --failed",   "Show all failed units"),
+    "cp": [
+        ("cp -r ",                          "Copy directory recursively"),
+        ("cp -i ",                          "Copy with overwrite prompt"),
+        ("cp -a ",                          "Copy preserving attributes"),
     ],
-    "kubectl": [
-        ("kubectl get pods -n ",            "List pods in namespace"),
-        ("kubectl logs -f ",                "Follow pod logs"),
-        ("kubectl apply -f ",               "Apply manifest from file"),
-        ("kubectl describe pod ",           "Show pod details and events"),
-        ("kubectl exec -it  -- bash",       "Open shell in pod"),
+    "mv": [
+        ("mv -i ",                          "Move with overwrite prompt"),
+        ("mv ",                             "Move or rename files"),
     ],
-    "npm": [
-        ("npm run dev",                     "Start development server"),
-        ("npm install ",                    "Install a package"),
-        ("npm run build",                   "Build production bundle"),
-        ("npm test",                        "Run test suite"),
+    "rm": [
+        ("rm -rf ",                         "Remove directory recursively"),
+        ("rm -i ",                          "Remove with confirmation"),
     ],
-    "cargo": [
-        ("cargo build --release",           "Build optimized release binary"),
-        ("cargo test",                      "Run all tests"),
-        ("cargo clippy",                    "Lint with Clippy"),
-        ("cargo add ",                      "Add a dependency"),
+    "mkdir": [
+        ("mkdir -p ",                       "Create nested directories"),
     ],
-    "python3": [
-        ("python3 -m venv .venv",           "Create virtual environment"),
-        ("python3 -m pytest",               "Run test suite with pytest"),
-        ("python3 -m pip install ",         "Install package via pip"),
-        ("python3 -m http.server 8080",     "Quick local HTTP server"),
+    "touch": [
+        ("touch ",                          "Create empty file"),
     ],
-    "ssh": [
-        ("ssh -i ~/.ssh/id_ed25519 ",       "Connect using ed25519 key"),
-        ("ssh -L 8080:localhost:8080 ",     "Create local port forward tunnel"),
+    "ln": [
+        ("ln -s ",                          "Create symbolic link"),
+    ],
+    "head": [
+        ("head -n 20 ",                     "Show first 20 lines"),
+    ],
+    "tail": [
+        ("tail -f ",                        "Follow file in real time"),
+        ("tail -n 50 ",                     "Show last 50 lines"),
+    ],
+    "less": [
+        ("less ",                           "View file with scrolling"),
+    ],
+    "wc": [
+        ("wc -l ",                          "Count lines in file"),
+    ],
+    "sort": [
+        ("sort -u ",                        "Sort and remove duplicates"),
+        ("sort -n ",                        "Sort numerically"),
+    ],
+    "uniq": [
+        ("uniq -c ",                        "Count unique occurrences"),
+    ],
+    "diff": [
+        ("diff -u ",                        "Unified diff format"),
+    ],
+    # ── Text Processing ───────────────────────────────────────────────────────
+    "grep": [
+        ("grep -rn ",                       "Recursive search with lines"),
+        ("grep -rn --include='*.py' ",      "Search Python files only"),
+        ("grep -i ",                        "Case-insensitive search"),
+        ("grep -c ",                        "Count matches"),
+    ],
+    "sed": [
+        ("sed -i 's///g' ",                 "Find and replace in file"),
+        ("sed -n '1,10p' ",                 "Print lines 1-10"),
+    ],
+    "awk": [
+        ("awk '{print $1}' ",              "Print first column"),
+        ("awk -F: '{print $1}' ",          "Split by colon print first"),
+    ],
+    "xargs": [
+        ("xargs -I {} ",                    "Execute per input line"),
+    ],
+    "tee": [
+        ("tee ",                            "Write to stdout and file"),
+    ],
+    # ── Search & Find ─────────────────────────────────────────────────────────
+    "find": [
+        ("find . -name '*.py' -type f",     "Find Python files"),
+        ("find . -mtime -1 -type f",        "Files modified last 24h"),
+        ("find . -size +100M",              "Files larger than 100MB"),
+    ],
+    "which": [
+        ("which ",                          "Find command location"),
+    ],
+    "locate": [
+        ("locate ",                         "Fast file search"),
+    ],
+    # ── Package Managers ──────────────────────────────────────────────────────
+    "pip": [
+        ("pip install ",                    "Install Python package"),
+        ("pip install -r requirements.txt", "Install from requirements"),
+        ("pip list",                        "List installed packages"),
+        ("pip freeze > requirements.txt",   "Export requirements"),
+        ("pip uninstall ",                  "Uninstall package"),
+        ("pip show ",                       "Show package info"),
+    ],
+    "pip3": [
+        ("pip3 install ",                   "Install Python3 package"),
+        ("pip3 list",                       "List installed packages"),
+    ],
+    "apt": [
+        ("apt update && apt upgrade -y",    "Update all packages"),
+        ("apt install ",                    "Install package"),
+        ("apt search ",                     "Search for package"),
+        ("apt remove ",                     "Remove package"),
+        ("apt autoremove",                  "Remove unused packages"),
+    ],
+    "brew": [
+        ("brew install ",                   "Install Homebrew package"),
+        ("brew update && brew upgrade",     "Update all packages"),
+        ("brew search ",                    "Search packages"),
+        ("brew list",                       "List installed packages"),
+    ],
+    "snap": [
+        ("snap install ",                   "Install snap package"),
+        ("snap list",                       "List snaps"),
+    ],
+    # ── System Monitoring ─────────────────────────────────────────────────────
+    "ps": [
+        ("ps aux",                          "List all processes"),
+        ("ps aux | grep ",                  "Find specific process"),
+    ],
+    "top": [
+        ("top",                             "Interactive process monitor"),
+        ("top -b -n 1",                     "Batch mode single snapshot"),
+    ],
+    "htop": [
+        ("htop",                            "Interactive process viewer"),
+    ],
+    "df": [
+        ("df -h",                           "Disk usage human readable"),
+        ("df -hT",                          "Disk usage with filesystem"),
+    ],
+    "du": [
+        ("du -sh ",                         "Directory size summary"),
+        ("du -sh * | sort -rh | head",      "Top 10 largest items"),
+    ],
+    "free": [
+        ("free -h",                         "Memory usage human readable"),
+    ],
+    "uptime": [
+        ("uptime",                          "System uptime and load"),
+    ],
+    "lsof": [
+        ("lsof -i :",                       "Find process on port"),
+    ],
+    # ── Networking ────────────────────────────────────────────────────────────
+    "ping": [
+        ("ping -c 4 ",                      "Ping host 4 times"),
     ],
     "curl": [
-        ("curl -s  | jq .",                 "Fetch JSON and pretty-print"),
-        ("curl -X POST -H 'Content-Type: application/json' -d '{}'", "POST JSON body"),
-        ("curl -o  ",                       "Download file to disk"),
+        ("curl -s  | jq .",                 "Fetch JSON pretty-print"),
+        ("curl -X POST -H 'Content-Type: application/json' -d '{}'", "POST JSON"),
+        ("curl -o  ",                       "Download file"),
+        ("curl -I ",                        "Fetch headers only"),
     ],
-    "find": [
-        ("find . -name '*.py' -type f",     "Find all Python files recursively"),
-        ("find . -mtime -1 -type f",        "Files modified in last 24 hours"),
-        ("find /tmp -name '*.log' -delete", "Delete old log files in /tmp"),
+    "wget": [
+        ("wget ",                           "Download file"),
+        ("wget -c ",                        "Resume download"),
     ],
-    "grep": [
-        ("grep -rn  .",                     "Recursive search with line numbers"),
-        ("grep -rn --include='*.py'  .",    "Search only Python files"),
+    "ssh": [
+        ("ssh -i ~/.ssh/id_ed25519 ",       "Connect with key"),
+        ("ssh -L 8080:localhost:8080 ",     "Local port forward"),
     ],
-    "tar": [
-        ("tar -czf archive.tar.gz ",        "Create compressed archive"),
-        ("tar -xzf ",                       "Extract compressed archive"),
+    "scp": [
+        ("scp -r  user@host:",             "Copy dir to remote"),
     ],
     "rsync": [
-        ("rsync -avzP  user@host:",         "Sync folder to remote with progress"),
-        ("rsync -avz --delete  ",           "Sync and delete removed files"),
+        ("rsync -avzP  user@host:",         "Sync with progress"),
+        ("rsync -avz --delete  ",           "Sync delete removed"),
+    ],
+    "netstat": [
+        ("netstat -tlnp",                   "Show listening ports"),
+    ],
+    "ss": [
+        ("ss -tlnp",                        "Show listening ports"),
+    ],
+    "ip": [
+        ("ip addr show",                    "Show IP addresses"),
+        ("ip route show",                   "Show routing table"),
+    ],
+    "nslookup": [
+        ("nslookup ",                       "DNS lookup"),
+    ],
+    "dig": [
+        ("dig ",                            "Detailed DNS lookup"),
+    ],
+    # ── Permissions ───────────────────────────────────────────────────────────
+    "chmod": [
+        ("chmod +x ",                       "Make file executable"),
+        ("chmod 755 ",                      "Owner rwx group/other rx"),
+        ("chmod -R 644 ",                   "Recursive file permissions"),
+    ],
+    "chown": [
+        ("chown -R  ",                      "Change owner recursively"),
+    ],
+    # ── Compression ───────────────────────────────────────────────────────────
+    "tar": [
+        ("tar -czf archive.tar.gz ",        "Create tar.gz archive"),
+        ("tar -xzf ",                       "Extract tar.gz"),
+        ("tar -xvf ",                       "Extract with verbose"),
+    ],
+    "zip": [
+        ("zip -r archive.zip ",             "Create zip archive"),
+    ],
+    "unzip": [
+        ("unzip ",                          "Extract zip archive"),
+    ],
+    "gzip": [
+        ("gzip ",                           "Compress file"),
+        ("gunzip ",                         "Decompress file"),
+    ],
+    # ── Git ───────────────────────────────────────────────────────────────────
+    "git": [
+        ("git commit -m \"\"",              "Commit with message"),
+        ("git push origin",                 "Push to remote"),
+        ("git pull --rebase",               "Fetch + rebase"),
+        ("git status",                      "Working tree status"),
+        ("git log --oneline --graph",       "Visual commit history"),
+        ("git checkout -b ",                "Create new branch"),
+        ("git diff --staged",               "Show staged changes"),
+        ("git stash push -m \"\"",          "Stash with label"),
+        ("git branch -d ",                  "Delete local branch"),
+        ("git fetch --all",                 "Fetch all remotes"),
+        ("git rebase -i HEAD~3",            "Interactive rebase"),
+        ("git reset --hard HEAD",           "Discard all changes"),
+        ("git cherry-pick ",                "Apply specific commit"),
+        ("git clone ",                      "Clone repository"),
+        ("git add .",                       "Stage all changes"),
+    ],
+    # ── Docker ────────────────────────────────────────────────────────────────
+    "docker": [
+        ("docker ps -a",                    "List all containers"),
+        ("docker build -t  .",              "Build image"),
+        ("docker run -it --rm ",            "Run interactively"),
+        ("docker-compose up -d",            "Start services detached"),
+        ("docker exec -it  bash",           "Shell into container"),
+        ("docker logs -f ",                 "Follow container logs"),
+        ("docker system prune -af",         "Remove unused resources"),
+        ("docker images",                   "List images"),
+        ("docker stop ",                    "Stop container"),
+    ],
+    # ── Services ──────────────────────────────────────────────────────────────
+    "systemctl": [
+        ("systemctl status ",               "Show service status"),
+        ("systemctl restart ",              "Restart service"),
+        ("systemctl enable --now ",         "Enable and start service"),
+        ("systemctl list-units --failed",   "List failed units"),
     ],
     "journalctl": [
-        ("journalctl -u  -f",               "Follow logs for specific service"),
-        ("journalctl --since '1 hour ago'", "Logs from the last hour"),
-        ("journalctl -p err -b",            "Errors since last boot"),
+        ("journalctl -u  -f",              "Follow service logs"),
+        ("journalctl --since '1 hour ago'", "Logs last hour"),
+        ("journalctl -p err -b",            "Errors since boot"),
+    ],
+    "service": [
+        ("service  status",                 "Check service status"),
+    ],
+    # ── Kubernetes ────────────────────────────────────────────────────────────
+    "kubectl": [
+        ("kubectl get pods -n ",            "List pods"),
+        ("kubectl logs -f ",                "Follow pod logs"),
+        ("kubectl apply -f ",               "Apply manifest"),
+        ("kubectl exec -it  -- bash",       "Shell into pod"),
+        ("kubectl describe pod ",           "Pod details"),
+    ],
+    # ── Dev Tools ─────────────────────────────────────────────────────────────
+    "npm": [
+        ("npm run dev",                     "Start dev server"),
+        ("npm install ",                    "Install package"),
+        ("npm run build",                   "Build production"),
+        ("npm test",                        "Run tests"),
+        ("npm init -y",                     "Initialize package"),
+    ],
+    "npx": [
+        ("npx ",                            "Run npm package"),
+    ],
+    "yarn": [
+        ("yarn add ",                       "Add package"),
+        ("yarn dev",                        "Start dev server"),
+    ],
+    "cargo": [
+        ("cargo build --release",           "Build optimized binary"),
+        ("cargo test",                      "Run tests"),
+        ("cargo clippy",                    "Lint code"),
+        ("cargo add ",                      "Add dependency"),
+    ],
+    "python3": [
+        ("python3 -m venv .venv",           "Create virtual env"),
+        ("python3 -m pytest",               "Run pytest"),
+        ("python3 -m pip install ",         "Install package"),
+        ("python3 -m http.server 8080",     "Local HTTP server"),
+        ("python3 ",                        "Run Python script"),
+    ],
+    "python": [
+        ("python -m venv .venv",            "Create virtual env"),
+        ("python -m pytest",                "Run pytest"),
+    ],
+    "pytest": [
+        ("pytest -v --tb=short",            "Run tests verbose"),
+        ("pytest --cov= ",                  "Run with coverage"),
+        ("pytest -k ",                      "Run matching tests"),
+    ],
+    "make": [
+        ("make",                            "Run default target"),
+        ("make clean",                      "Clean build files"),
+        ("make install",                    "Install built project"),
+    ],
+    "cmake": [
+        ("cmake -B build",                  "Configure build"),
+        ("cmake --build build",             "Build project"),
+    ],
+    "go": [
+        ("go build ./...",                  "Build Go project"),
+        ("go test ./...",                   "Run Go tests"),
+        ("go mod tidy",                     "Clean dependencies"),
+        ("go run ",                         "Run Go file"),
+    ],
+    "node": [
+        ("node ",                           "Run JavaScript file"),
+    ],
+    # ── Editors ───────────────────────────────────────────────────────────────
+    "nano": [
+        ("nano ",                           "Edit file with nano"),
+    ],
+    "vim": [
+        ("vim ",                            "Edit file with vim"),
+    ],
+    "code": [
+        ("code .",                          "Open VS Code here"),
+        ("code ",                           "Open file in VS Code"),
+    ],
+    # ── Misc ──────────────────────────────────────────────────────────────────
+    "echo": [
+        ("echo ",                           "Print text to stdout"),
+        ("echo $PATH",                      "Show PATH variable"),
+    ],
+    "export": [
+        ("export PATH=$PATH:",              "Add to PATH"),
+    ],
+    "alias": [
+        ("alias",                           "List all aliases"),
+    ],
+    "history": [
+        ("history | grep ",                 "Search command history"),
+    ],
+    "man": [
+        ("man ",                            "Show manual page"),
+    ],
+    "date": [
+        ("date",                            "Show current date/time"),
+        ("date +%Y-%m-%d",                  "Date in ISO format"),
+    ],
+    "whoami": [
+        ("whoami",                          "Show current user"),
+    ],
+    "hostname": [
+        ("hostname",                        "Show system hostname"),
+    ],
+    "env": [
+        ("env",                             "Show environment vars"),
+    ],
+    "xdg-open": [
+        ("xdg-open ",                       "Open file with default app"),
+    ],
+    "kill": [
+        ("kill -9 ",                        "Force kill process"),
+        ("kill ",                           "Terminate process"),
+    ],
+    "killall": [
+        ("killall ",                        "Kill processes by name"),
+    ],
+    "screen": [
+        ("screen -S ",                      "Create named session"),
+        ("screen -r ",                      "Reattach session"),
+    ],
+    "tmux": [
+        ("tmux new -s ",                    "Create named session"),
+        ("tmux attach -t ",                 "Attach to session"),
+        ("tmux ls",                         "List sessions"),
+    ],
+    "crontab": [
+        ("crontab -l",                      "List cron jobs"),
+        ("crontab -e",                      "Edit cron jobs"),
+    ],
+    "watch": [
+        ("watch -n 1 ",                     "Run command every second"),
+    ],
+    "sudo": [
+        ("sudo ",                           "Run as superuser"),
+        ("sudo su",                         "Switch to root"),
+        ("sudo apt update",                 "Update package list"),
+    ],
+    "su": [
+        ("su -",                            "Switch to root"),
     ],
 }
 

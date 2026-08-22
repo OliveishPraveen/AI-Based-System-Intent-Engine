@@ -39,7 +39,13 @@ class OllamaClient(BaseLLMClient):
                         {"role": "user", "content": prompt},
                     ],
                     "stream": False,
+                    "keep_alive": -1,
                     "format": "json",
+                    "options": {
+                        "temperature": 0,        # greedy decoding — fastest
+                        "num_predict": 150,      # cap output tokens — responses are short JSON
+                        "num_ctx": 2048,         # smaller context window — faster attention
+                    },
                 },
             )
             resp.raise_for_status()

@@ -128,7 +128,7 @@ PYEOF
 
     # ── Call daemon ────────────────────────────────────────────────────────────
     local response
-    response=$(curl --silent --max-time 4 \
+    response=$(curl --silent --max-time 20 \
         --unix-socket "$INTENT_SOCKET" \
         -X POST http://localhost/analyze \
         -H "Content-Type: application/json" \

@@ -97,6 +97,21 @@ class LLMReasoner:
             )
         else:
             log.info("llm_reasoner_initialized")
+            # Fire-and-forget background task to pre-load the model into memory
+            asyncio.create_task(self._prewarm_model())
+
+    async def _prewarm_model(self) -> None:
+        """Background task to load the model into VRAM/RAM before the user needs it."""
+        log.info("llm_prewarm_started")
+        try:
+            # A dummy request forces Ollama to load the model from disk to memory
+            await self._client.complete(
+                prompt="Initialize",
+                system_prompt="You are a system daemon."
+            )
+            log.info("llm_prewarm_complete")
+        except Exception as e:
+            log.debug("llm_prewarm_failed", error=str(e))
 
     async def reason(
         self,
@@ -123,48 +138,22 @@ class LLMReasoner:
         user_prompt = self._prompt_builder.build_analysis_prompt(parsed, ctx, rule_hint)
 
         # ── Call LLM with hard timeout ─────────────────────────────────────────
+        timeout_s = self._config.get("llm", {}).get("timeout_s", 15.0)
         try:
             llm_response = await asyncio.wait_for(
                 self._client.complete(user_prompt, system_prompt),
-                timeout=_LLM_TIMEOUT_S,
+                timeout=timeout_s,
             )
         except asyncio.TimeoutError:
-            raise TimeoutError(f"LLM response exceeded {_LLM_TIMEOUT_S}s timeout")
+            raise TimeoutError(f"LLM response exceeded {timeout_s}s timeout")
 
         # ── Parse response ─────────────────────────────────────────────────────
         parsed_response = self._response_parser.parse(llm_response.content)
 
-        # ── Reflection pass (Priority 3 fix) ──────────────────────────────────
-        # If confidence is below threshold, fire a focused critique re-prompt.
-        # This corrects borderline AMBIGUOUS→MEDIUM/HIGH misclassifications
-        # at the cost of ~1.5s additional latency (only on uncertain verdicts).
-        reflection_threshold = self._config.get("llm", {}).get(
-            "reflection_threshold", 0.65
-        )
-        if (
-            parsed_response.confidence < reflection_threshold
-            and parsed_response.risk_level not in (RiskLevel.SAFE, RiskLevel.CRITICAL)
-        ):
-            try:
-                critique_prompt = self._prompt_builder.build_reflection_prompt(
-                    parsed, parsed_response
-                )
-                refined = await asyncio.wait_for(
-                    self._client.complete(critique_prompt, self._prompt_builder.build_system_prompt()),
-                    timeout=_LLM_TIMEOUT_S,
-                )
-                refined_response = self._response_parser.parse(refined.content)
-                # Only adopt the refined verdict if it's more confident
-                if refined_response.confidence > parsed_response.confidence:
-                    log.debug(
-                        "llm_reflection_improved",
-                        before_confidence=round(parsed_response.confidence, 2),
-                        after_confidence=round(refined_response.confidence, 2),
-                        command=parsed.raw[:40],
-                    )
-                    parsed_response = refined_response
-            except Exception:
-                pass  # Reflection is best-effort — never let it break the main flow
+        # ── Reflection pass DISABLED ───────────────────────────────────────────
+        # Previously made a second LLM call to refine low-confidence verdicts.
+        # Disabled to guarantee single-call latency (<2s warm).
+        # Re-enable by setting llm.reflection_enabled = true in config.
 
         # ── Safer alternative: curated table first, LLM output as fallback ────
 
