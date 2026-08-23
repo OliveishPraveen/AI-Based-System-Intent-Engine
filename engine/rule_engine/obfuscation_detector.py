@@ -1,5 +1,5 @@
 """
-Obfuscation Detector — Owner: Harshit
+Obfuscation Detector
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Pre-parse scan that fires BEFORE the main pattern matcher.

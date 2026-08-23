@@ -1,1 +1,1 @@
-"""UI package — Owner: Harshit"""
+"""UI package"""

@@ -1,5 +1,5 @@
 """
-Rule Engine Classifier — Owner: Praveen (OliveishPraveen)
+Rule Engine Classifier
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Main orchestration point for Tier 0 (structural fast-path) and Tier 1 (context-weighted)
 rule classification. Returns unified Verdicts according to engine/models.py contract.

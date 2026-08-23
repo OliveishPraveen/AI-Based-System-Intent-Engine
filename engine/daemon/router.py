@@ -1,5 +1,5 @@
 """
-Tier Router — Owner: Harshit
+Tier Router
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 The router is the decision-making spine of the daemon. It:

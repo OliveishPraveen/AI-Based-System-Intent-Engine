@@ -1,5 +1,5 @@
 """
-LLM Client Abstraction — Owner: Vansh
+LLM Client Abstraction
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Abstract base class + provider factory for multi-LLM support.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Intent Engine — Bash Shell Hook (Owner: Harshit)
+# Intent Engine — Bash Shell Hook
 #
 # INSTALL: source /path/to/intent_hook.bash  (add to ~/.bashrc)
 # BYPASS:  INTENT_ENGINE_SKIP=1 <command>

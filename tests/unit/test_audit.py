@@ -1,6 +1,5 @@
 """
 Unit tests for engine.audit
-Owner: Harshit
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""Config loader — Owner: Harshit"""
+"""Config loader"""
 
 from __future__ import annotations
 

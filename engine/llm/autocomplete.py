@@ -1,4 +1,4 @@
-# Autocomplete Engine — Owner: Harshit
+# Autocomplete Engine
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #
 # CLI Copilot: intelligent shell command autocomplete.

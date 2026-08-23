@@ -1,5 +1,5 @@
 """
-LLM Package — Owner: Vansh (jadonvansh2005)
+LLM Package
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 This is Vansh's primary domain. Architecture mirrors NEXUS-AI's:

@@ -1,5 +1,5 @@
 """
-Unit tests for the LLM Client and Reasoner — Owner: Vansh
+Unit tests for the LLM Client and Reasoner
 Tests use mocked LLM responses — never make real API calls in unit tests.
 """
 

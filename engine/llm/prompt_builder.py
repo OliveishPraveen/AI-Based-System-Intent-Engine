@@ -1,5 +1,5 @@
 """
-Prompt Builder — Owner: Vansh
+Prompt Builder
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Assembles structured prompts for the LLM reasoner.

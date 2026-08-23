@@ -36,6 +36,86 @@ AI-Based-System-Intent-Engine/
 
 ---
 
+## Module Dependency Graph
+
+```mermaid
+graph TD
+    Hook["hooks/<br/>Shell scripts"] -->|"HTTP POST /analyze<br/>Unix socket"| Daemon
+
+    subgraph Daemon["engine/daemon/"]
+        Server["server.py<br/>FastAPI endpoints"] --> Router["router.py<br/>Tier orchestration"]
+    end
+
+    Router -->|"ParsedCommand"| Parser
+    Router -->|"ParsedCommand"| RuleEngine
+    Router -->|"AMBIGUOUS only"| LLM
+
+    subgraph Parser["engine/parser/"]
+        CP["command_parser.py"]
+    end
+
+    subgraph RuleEngine["engine/rule_engine/"]
+        CL["classifier.py"] --> PM["pattern_matcher.py"]
+        PM --> PL["pattern_loader.py"]
+        PL --> TOML["rules/dangerous_patterns.toml"]
+    end
+
+    subgraph LLM["engine/llm/"]
+        R["reasoner.py"] --> PB["prompt_builder.py"]
+        R --> CLI["client.py (factory)"]
+        CLI --> GEM["providers/gemini.py"]
+        CLI --> OLL["providers/ollama.py"]
+        R --> ALT["alternatives/generator.py"]
+    end
+
+    Models["engine/models.py<br/>(shared contracts)"] -.->|"imported by"| Router
+    Models -.->|"imported by"| RuleEngine
+    Models -.->|"imported by"| LLM
+    Models -.->|"imported by"| Hook
+
+    Router -->|"Verdict + should_block"| UI
+    subgraph UI["engine/ui/"]
+        TUI["terminal_ui.py<br/>(ANSI prompt)"]
+    end
+    UI --> Audit["engine/audit/<br/>audit.jsonl"]
+
+    style Models fill:#8e44ad,color:#fff
+    style Hook fill:#2c3e50,color:#fff
+    style Audit fill:#2c3e50,color:#fff
+```
+
+## Component Layers
+
+```mermaid
+graph LR
+    subgraph Infra["🔵 Infrastructure Layer"]
+        H1["engine/daemon/"]
+        H2["engine/parser/"]
+        H3["engine/ui/"]
+        H4["engine/audit/"]
+        H5["hooks/"]
+        H6["install.sh"]
+    end
+
+    subgraph Rules["🟠 Rule Engine Layer"]
+        P1["engine/rule_engine/"]
+        P2["rules/dangerous_patterns.toml"]
+    end
+
+    subgraph AI["🟢 AI Reasoning Layer"]
+        V1["engine/llm/"]
+        V2["engine/alternatives/"]
+        V3["engine/risk/"]
+        V4["engine/contracts/"]
+    end
+
+    style Infra fill:#1a3a5c,color:#fff
+    style Rules fill:#5c2a00,color:#fff
+    style AI fill:#0a3d26,color:#fff
+```
+
+---
+
 ## Directory Deep-Dive
 
 ---
@@ -47,9 +127,9 @@ Everything the daemon, shell hook, and tests import comes from here. It is insta
 #### `engine/models.py` — **THE MOST IMPORTANT FILE**
 
 ```
-Owner:   Everyone reads. Nobody modifies without team agreement.
-Purpose: Defines all Pydantic data models — the shared language between
+Purpose: Defines all Pydantic data models — the shared contract between
          the shell hook, daemon, rule engine, and LLM layer.
+         This is a cross-cutting concern — changes require coordination.
 ```
 
 **When to read it:** Before writing any code in any module.
@@ -68,7 +148,7 @@ Purpose: Defines all Pydantic data models — the shared language between
 
 ---
 
-#### `engine/daemon/` — Harshit's Domain
+#### `engine/daemon/` — Background Service
 
 ```
 Purpose: The always-running background process. Receives commands from
@@ -89,7 +169,7 @@ Files:
 
 ---
 
-#### `engine/parser/` — Harshit's Domain
+#### `engine/parser/` — Command Tokenizer
 
 ```
 Purpose: Converts a raw command string into a ParsedCommand object.
@@ -107,7 +187,7 @@ Files:
 
 ---
 
-#### `engine/rule_engine/` — Praveen's Domain
+#### `engine/rule_engine/` — Pattern Classifier
 
 ```
 Purpose: Tier 0 + Tier 1 rule-based classification. Fast path.
@@ -128,7 +208,7 @@ Files:
 
 ---
 
-#### `engine/llm/` — Vansh's Domain
+#### `engine/llm/` — AI Reasoning Tier
 
 ```
 Purpose: Tier 2 LLM reasoning. Only called for AMBIGUOUS commands.
@@ -158,7 +238,7 @@ Files:
 
 ---
 
-#### `engine/ui/` — Harshit's Domain
+#### `engine/ui/` — Confirmation Prompt
 
 ```
 Purpose: The terminal prompt shown to the user when a command is blocked.
@@ -214,7 +294,7 @@ curl --unix-socket /tmp/intent_engine.sock http://localhost/health
 ### `rules/` — Pattern Library
 
 ```
-Owner:   Praveen
+Scope:   Pattern data
 Purpose: The data source for the rule engine. Add all new dangerous patterns
          here. Zero Python code changes needed to add new patterns.
 
@@ -247,7 +327,7 @@ curl -X POST --unix-socket /tmp/intent_engine.sock http://localhost/reload-rules
 ### `config/` — Configuration
 
 ```
-Owner:   Harshit (template). Each user has their own override.
+Scope:   Default settings. Each user has their own override.
 Purpose: Default settings. Users copy this to ~/.intent_engine/config/config.toml
          and customize it. The engine always loads defaults first, then overlays
          the user's config on top.
@@ -294,12 +374,12 @@ pytest tests/integration/ -v
 
 **Where each team member adds tests:**
 
-| Member | File |
+| Component | Test File |
 |---|---|
-| Harshit | `tests/unit/test_parser.py` |
-| Praveen | `tests/unit/test_rule_engine.py` |
-| Vansh | `tests/unit/test_llm_client.py`, `tests/unit/test_suggester.py` |
-| All | `tests/integration/test_end_to_end.py` |
+| Parser | `tests/unit/test_parser.py` |
+| Rule Engine | `tests/unit/test_rule_engine.py` |
+| LLM Client | `tests/unit/test_llm_client.py`, `tests/unit/test_suggester.py` |
+| End-to-End | `tests/integration/test_end_to_end.py` |
 
 **Adding a fixture command:**
 - Dangerous command → append to `tests/fixtures/dangerous_commands.txt`
@@ -313,7 +393,7 @@ from engine.parser.command_parser import CommandParser
 
 def test_my_case():
     parser = CommandParser()
-    result = parser.parse("sudo rm -rf /", cwd="/home/user", user="harshit")
+    result = parser.parse("sudo rm -rf /", cwd="/home/user", user="testuser")
     assert result.is_sudo is True
     assert result.base_command == "rm"
 ```
@@ -368,7 +448,7 @@ Check CI status on GitHub → Actions tab.
 
 ```bash
 # 1. Clone
-git clone git@github.com:Harshit7623/AI-Based-System-Intent-Engine.git
+git clone https://github.com/Harshit7623/AI-Based-System-Intent-Engine.git
 cd AI-Based-System-Intent-Engine
 
 # 2. Create virtual environment
@@ -396,10 +476,10 @@ curl --unix-socket /tmp/intent_engine.sock http://localhost/health
 # Always work in your virtual environment
 source .venv/bin/activate
 
-# Run your tests before committing
-pytest tests/unit/test_parser.py -v       # Harshit
-pytest tests/unit/test_rule_engine.py -v  # Praveen
-pytest tests/unit/test_llm_client.py -v   # Vansh
+# Run module-specific tests before committing
+pytest tests/unit/test_parser.py -v
+pytest tests/unit/test_rule_engine.py -v
+pytest tests/unit/test_llm_client.py -v
 
 # Lint check (CI will catch this anyway)
 ruff check engine/ tests/
@@ -470,8 +550,8 @@ curl --unix-socket /tmp/intent_engine.sock \
   -d '{
     "context": {
       "command": "rm -rf /var/log/*",
-      "cwd": "/home/harshit",
-      "user": "harshit",
+      "cwd": "/home/user",
+      "user": "testuser",
       "is_sudo": false,
       "shell": "bash",
       "session_id": "test-001"

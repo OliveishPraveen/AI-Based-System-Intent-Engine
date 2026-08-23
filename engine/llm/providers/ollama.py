@@ -1,5 +1,5 @@
 """
-Ollama Provider — Owner: Vansh
+Ollama Provider
 Local LLM via Ollama HTTP API. Privacy-first default provider.
 
 Requires: ollama running locally (ollama serve)

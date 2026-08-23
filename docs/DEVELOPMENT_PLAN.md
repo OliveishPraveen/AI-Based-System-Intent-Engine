@@ -7,44 +7,37 @@
 
 ## Team Ownership Map
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    USER'S TERMINAL                               │
-│             $ rm -rf /var/log/*  ← user types                  │
-└─────────────────────┬───────────────────────────────────────────┘
-                      │
-          ┌───────────▼────────────┐
-          │     SHELL HOOK         │  ◄── HARSHIT
-          │  (zsh preexec /        │      hooks/intent_hook.zsh
-          │   bash DEBUG trap)     │      hooks/intent_hook.bash
-          └───────────┬────────────┘
-                      │ Unix socket (~5ms)
-          ┌───────────▼────────────┐
-          │   DAEMON + ROUTER      │  ◄── HARSHIT
-          │  (FastAPI + Uvicorn)   │      engine/daemon/server.py
-          │  (Tier orchestration)  │      engine/daemon/router.py
-          └─────┬─────────┬────────┘
-                │         │
-    ┌───────────▼──┐  ┌───▼──────────────┐
-    │  RULE ENGINE │  │   LLM REASONER   │
-    │  Tier 0 + 1  │  │    Tier 2        │
-    │              │  │                  │
-    │  ◄ PRAVEEN   │  │   ◄ VANSH        │
-    │              │  │                  │
-    │ engine/      │  │ engine/llm/      │
-    │ rule_engine/ │  │ reasoner.py      │
-    │ classifier   │  │ providers/       │
-    │ pattern_     │  │ suggester.py     │
-    │ matcher      │  │                  │
-    └──────────────┘  └──────────────────┘
-                      │
-          ┌───────────▼────────────┐
-          │   CONFIRMATION UI      │  ◄── HARSHIT
-          │  (ANSI terminal prompt)│      engine/ui/terminal_ui.py
-          │  [y] Execute           │
-          │  [n] Abort             │
-          │  [s] Use safer version │
-          └────────────────────────┘
+```mermaid
+flowchart TD
+    User(["👤 User<br/>Linux Shell"])
+    User -->|"types command"| Hook
+
+    subgraph Infrastructure Team["🔵 Infrastructure Team — Shell & Infrastructure"]
+        Hook["Shell Hook<br/>hooks/intent_hook.zsh<br/>hooks/intent_hook.bash"]
+        Daemon["Daemon + Router<br/>engine/daemon/server.py<br/>engine/daemon/router.py"]
+        UI["Confirmation UI<br/>engine/ui/terminal_ui.py<br/>[y] Execute  [n] Abort  [s] Safer"]
+    end
+
+    subgraph Rule Engine Team["🟠 Rule Engine Team — Rule Engine"]
+        RE["Rule Engine<br/>Tier 0: Hardcoded regex<br/>Tier 1: TOML patterns (41+)"]
+        TOML["Pattern Library<br/>rules/dangerous_patterns.toml"]
+    end
+
+    subgraph AI Reasoning Team["🟢 AI Reasoning Team — AI Reasoning"]
+        LLM["LLM Reasoner<br/>engine/llm/reasoner.py<br/>Gemini 3.6 Flash"]
+        ALT["Safer Alternatives<br/>engine/alternatives/"]
+    end
+
+    Hook -->|"Unix socket POST"| Daemon
+    Daemon --> RE
+    Daemon -->|"AMBIGUOUS only"| LLM
+    LLM --> ALT
+    Daemon --> UI
+    UI -->|"user decision"| User
+
+    style Infrastructure Team fill:#1a3a5c,color:#fff
+    style Rule Engine Team fill:#5c2a00,color:#fff
+    style AI Reasoning Team fill:#0a3d26,color:#fff
 ```
 
 ---
@@ -59,8 +52,8 @@
 AnalyzeRequest(
     context = CommandContext(
         command    = "rm -rf /var/log/*",  # raw string exactly as typed
-        cwd        = "/home/harshit",
-        user       = "harshit",
+        cwd        = "/home/user",
+        user       = "testuser",
         is_sudo    = False,
         shell      = "zsh",
         session_id = "uuid-abc-123"
@@ -94,20 +87,20 @@ AnalyzeResponse(
 
 ---
 
-## Harshit — Full Phase Breakdown
+## Infrastructure Team — Full Phase Breakdown
 
 > **Role: System Architect + Shell Integration**
 > **Domain: Everything that touches the OS, the terminal, and the daemon**
 
-### Why This Work Is Yours
+### Architectural Significance
 
-Neither Praveen nor Vansh has demonstrated shell scripting, Unix sockets, or daemon management in any public repo. This isn't just preference — it's the right allocation by skill. The shell hook is also the **highest-risk** piece: if it breaks, the user can't type commands at all.
+The Infrastructure Team manages shell scripting, Unix sockets, and daemon management. The shell hook is also the **highest-risk** piece: if it breaks, the user can't type commands at all.
 
 ---
 
 ### Phase 1 · Days 1–2 · Shell Hook + Mock Daemon
 
-**This phase unblocks both teammates on Day 1.**
+**This phase unblocks the rest of the pipeline.**
 
 | Deliverable | File | What It Does |
 |---|---|---|
@@ -128,9 +121,9 @@ curl --unix-socket /tmp/intent_engine.sock http://localhost/health
 # Expected: {"status": "ok", "pid": 12345}
 ```
 
-**Immediately share with teammates:**
+**Immediately share across teams:**
 - The `AnalyzeRequest` / `AnalyzeResponse` JSON examples above
-- A running mock daemon they can `curl` against from their machines
+- A running mock daemon for local testing
 
 ---
 
@@ -146,7 +139,7 @@ curl --unix-socket /tmp/intent_engine.sock http://localhost/health
 | Glob detection | `engine/parser/command_parser.py` | `/var/log/*` → `is_glob=True`, `glob_patterns=["/var/log/*"]` |
 | Subshell detection | `engine/parser/command_parser.py` | `$(curl ...)`, backtick forms |
 | Redirect detection | `engine/parser/command_parser.py` | `>`, `>>`, `2>` |
-| Tier router (real) | `engine/daemon/router.py` | Replace mock: call Praveen's `RuleEngineClassifier.classify()` |
+| Tier router (real) | `engine/daemon/router.py` | Replace mock: call Rule Engine Team's `RuleEngineClassifier.classify()` |
 | Latency logging | `engine/daemon/router.py` | Log `latency_ms` for every request |
 | Session state | `engine/daemon/session.py` | Per-session `ALWAYS_ALLOW` decisions persist within terminal session |
 | Audit log writer | `engine/daemon/server.py` | Write `AuditLogEntry` JSON to `~/.intent_engine/logs/YYYY-MM-DD.jsonl` |
@@ -180,7 +173,7 @@ curl --unix-socket /tmp/intent_engine.sock http://localhost/health
 
 ### Phase 4 · Days 11–12 · Edge Case Hardening
 
-This phase is driven by what you find in integration testing. Your job is to make the parser bulletproof against every real-world shell edge case.
+This phase is driven by what is found in integration testing. The goal is to make the parser bulletproof against every real-world shell edge case.
 
 **Edge cases to test and handle:**
 
@@ -209,30 +202,30 @@ This phase is driven by what you find in integration testing. Your job is to mak
 
 ---
 
-## Praveen — Full Phase Breakdown
+## Rule Engine Team — Full Phase Breakdown
 
 > **Role: Rule Engine + Verdict API**
 > **Domain: `engine/rule_engine/` + `rules/dangerous_patterns.toml`**
 
-### Why This Work Is His
+### Design Principles
 
-His `Ai_Email_Classifier` is a hybrid rule-filter + DistilBERT classifier that categorizes emails as `urgent / normal / spam`. That is **exactly** the same architecture as the Intent Engine's Tier 0/1:
+The Rule Engine is built similarly to a hybrid rule-filter + contextual classifier that categorizes inputs into risk levels. This is the architecture for Tier 0/1:
 
-| His Email Classifier | Intent Engine Equivalent |
+| Classifier Component | Intent Engine Equivalent |
 |---|---|
 | Rule-based filter (keyword matching) | Tier 0 patterns (fork bomb, rm -rf /) |
-| DistilBERT model (contextual classification) | Tier 1 pattern + context weighting |
+| Contextual model | Tier 1 pattern + context weighting |
 | FastAPI backend serving predictions | FastAPI verdict service (`engine/rule_engine/service.py`) |
-| Urgency confidence score | `Verdict.confidence` (0.0–1.0) |
+| Confidence score | `Verdict.confidence` (0.0–1.0) |
 
 ---
 
 ### Phase 1 · Days 1–2 · Study + Setup
 
 - Clone repo, `pip install -e ".[dev]"`
-- Study `engine/models.py` — especially `ParsedCommand` (his input) and `Verdict` (his output)
-- Study `engine/rule_engine/classifier.py` — his `classify()` method is pre-scaffolded. He fills in the body.
-- Study `rules/dangerous_patterns.toml` — the TOML format his pattern library uses
+- Study `engine/models.py` — especially `ParsedCommand` (input) and `Verdict` (output)
+- Study `engine/rule_engine/classifier.py` — implement `classify()` method body
+- Study `rules/dangerous_patterns.toml` — the TOML format the pattern library uses
 - Run existing parser tests to understand `ParsedCommand` structure: `pytest tests/unit/test_parser.py`
 
 ---
@@ -295,36 +288,36 @@ Return the **highest-confidence match**. If no match scores ≥ 0.55, return `AM
 
 ### Phase 4 · Days 9–12 · Integration + Edge Cases
 
-- Praveen integrates with Harshit's real daemon (replace mock)
-- Harshit feeds Praveen edge cases from shell hook testing → Praveen adds patterns
+- Rule Engine Team integrates with Infrastructure Team's real daemon (replace mock)
+- Infrastructure Team feeds Rule Engine Team edge cases from shell hook testing → Rule Engine Team adds patterns
 - Final coverage target: `pytest --cov=engine/rule_engine` → **90%+**
 
 ---
 
-## Vansh — Full Phase Breakdown
+## AI Reasoning Team — Full Phase Breakdown
 
 > **Role: LLM Reasoning Tier + Safer Alternatives**
 > **Domain: `engine/llm/`**
 
-### Why This Work Is His
+### Design Principles
 
 NEXUS-AI performs: planning → tool selection → execution → reflection → validation → human-in-loop approval. The Intent Engine's LLM tier is a **focused, time-constrained version** of exactly that pipeline for a single command:
 
-| NEXUS-AI | Intent Engine LLM Tier |
+| Component | Intent Engine LLM Tier |
 |---|---|
 | Multi-step task planning | `PromptBuilder.build_analysis_prompt()` |
-| Multi-provider LLM (Gemini/OpenAI) | `LLMClientFactory` → Ollama / Gemini / OpenAI |
+| Multi-provider LLM | `LLMClientFactory` → Ollama / Gemini / OpenAI |
 | Reflection + validation | Optional second-pass prompt if confidence < 0.7 |
-| Human-in-loop approval | Confirmation UI (`y/n/e/s`) — Harshit's layer |
+| Human-in-loop approval | Confirmation UI (`y/n/e/s`) — Infrastructure Team's layer |
 | Tool selection | `SaferAlternativeSuggester` |
 
 ---
 
 ### Phase 1 · Days 1–2 · Study + Ollama Setup
 
-- Study `engine/models.py` — especially `Verdict` (what he must return)
-- Study `engine/llm/reasoner.py` — his `reason()` is scaffolded, he fills the body
-- Study `engine/llm/prompt_builder.py` — system prompt pre-written, he can tune it
+- Study `engine/models.py` — especially `Verdict` (expected return schema)
+- Study `engine/llm/reasoner.py` — implement the `reason()` body
+- Study `engine/llm/prompt_builder.py` — system prompt tuning
 - Run `ResponseParser` tests (already written): `pytest tests/unit/test_llm_client.py -k TestResponseParser`
 - Install and test Ollama: `ollama pull llama3.2:3b && ollama serve`
 
@@ -342,14 +335,14 @@ NEXUS-AI performs: planning → tool selection → execution → reflection → 
 
 ### Phase 3 · Days 6–8 · Core Reasoner
 
-**The most important output Vansh produces: `reason()` returns a definitive, non-AMBIGUOUS `Verdict` for every command sent to it.**
+**The most important output AI Reasoning Team produces: `reason()` returns a definitive, non-AMBIGUOUS `Verdict` for every command sent to it.**
 
 Key decisions:
-- **Model choice:** `llama3.2:3b` (fast, good enough) vs `qwen2.5:3b` (better reasoning, slightly slower) — Vansh decides based on testing
+- **Model choice:** `llama3.2:3b` (fast, good enough) vs `qwen2.5:3b` (better reasoning, slightly slower) — AI Reasoning Team decides based on testing
 - **Reflection pass:** If confidence < 0.70, re-prompt with: *"You said X, but reconsider: [critique]. Update your assessment."* — adds ~1s but improves accuracy for edge cases
 - **Never return AMBIGUOUS** — the `ResponseParser` will reject it; force a definitive level
 
-**Ambiguous commands Vansh must handle correctly:**
+**Ambiguous commands AI Reasoning Team must handle correctly:**
 
 | Command | Expected | Why Hard |
 |---|---|---|
@@ -374,23 +367,29 @@ Write `tests/unit/test_suggester.py` — every table entry has a test.
 
 ## Cross-Team Dependencies
 
-```
-Day 1: Harshit publishes mock daemon
-           └─► Praveen can call /classify via HTTP independently
-           └─► Vansh can test reasoner in isolation via pytest
+```mermaid
+sequenceDiagram
+    participant H as 🔵 Infrastructure Team
+    participant P as 🟠 Rule Engine Team
+    participant V as 🟢 AI Reasoning Team
 
-Day 5: Harshit's real parser is ready
-           └─► Praveen receives ParsedCommand objects (no longer mocked)
+    Note over H,V: Day 1 — Infrastructure Team publishes mock daemon + models.py
+    H->>P: AnalyzeRequest / Verdict schemas + curl-able mock
+    H->>V: ParsedCommand schema + running mock to test against
 
-Days 9-10: Integration sprint
-           └─► Praveen's RuleEngineClassifier plugs into router.py
-           └─► Vansh's LLMReasoner plugs into router.py
-           └─► All mocks replaced with real implementations
+    Note over H,V: Day 5 — Real parser ready
+    H->>P: ParsedCommand objects (replaces mocked input)
+    H->>V: ParsedCommand objects (replaces mocked input)
 
-Days 11-12: Edge case feedback loop
-           └─► Harshit finds edge cases in shell testing
-           └─► Praveen adds patterns
-           └─► Vansh updates LLM prompts
+    Note over H,V: Days 9-10 — Integration sprint
+    P->>H: RuleEngineClassifier.classify() plugged into router.py
+    V->>H: LLMReasoner.reason() plugged into router.py
+
+    Note over H,V: Days 11-12 — Edge case feedback loop
+    H->>P: Shell edge cases found in testing
+    P->>H: New TOML patterns added + hot-reloaded
+    H->>V: Ambiguous commands that LLM misclassified
+    V->>H: Updated prompts + improved verdicts
 ```
 
 ---
@@ -413,23 +412,71 @@ These were gaps in the original proposal — all now included:
 
 | Feature | Owner | Day |
 |---|---|---|
-| Personal allowlist (`ALWAYS_ALLOW`) | Harshit | 6–7 |
-| Session-level allowlist (resets on close) | Harshit | 6 |
-| `ALWAYS_DENY` list in config | Harshit | 7 |
-| Structured audit log (`.jsonl`) | Harshit | 6 |
-| Hot-reload pattern library | Harshit + Praveen | 7 |
-| Dry-run mode (analyze, never block) | Harshit | 8 |
-| `--dry-run` flag reduces risk score | Harshit (parser) + Praveen (confidence) | 5 |
-| Emergency bypass (`INTENT_ENGINE_SKIP=1`) | Harshit | 8 |
-| History-aware context (last N commands) | Harshit + Vansh | 12 (stretch) |
-| LLM reflection pass (second-prompt) | Vansh | 7 |
-| Session stats (`/stats` endpoint) | Harshit | 7 |
+| Personal allowlist (`ALWAYS_ALLOW`) | Infrastructure Team | 6–7 |
+| Session-level allowlist (resets on close) | Infrastructure Team | 6 |
+| `ALWAYS_DENY` list in config | Infrastructure Team | 7 |
+| Structured audit log (`.jsonl`) | Infrastructure Team | 6 |
+| Hot-reload pattern library | Infrastructure Team + Rule Engine Team | 7 |
+| Dry-run mode (analyze, never block) | Infrastructure Team | 8 |
+| `--dry-run` flag reduces risk score | Infrastructure Team (parser) + Rule Engine Team (confidence) | 5 |
+| Emergency bypass (`INTENT_ENGINE_SKIP=1`) | Infrastructure Team | 8 |
+| History-aware context (last N commands) | Infrastructure Team + AI Reasoning Team | 12 (stretch) |
+| LLM reflection pass (second-prompt) | AI Reasoning Team | 7 |
+| Session stats (`/stats` endpoint) | Infrastructure Team | 7 |
 
 ---
 
 ## 13-Day Master Timeline
 
-| Day | Harshit | Praveen | Vansh |
+```mermaid
+gantt
+    title AI Intent Engine — 13-Day Build Plan
+    dateFormat  YYYY-MM-DD
+    axisFormat  Day %d
+
+    section Infrastructure Team
+    Models + mock daemon + Zsh hook     :h1, 2026-08-01, 2d
+    Bash hook + socket + /health        :h2, after h1, 1d
+    Command parser (shlex, sudo, globs) :h3, after h2, 1d
+    Pipe splitter + subshell/redirect   :h4, after h3, 1d
+    Tier router (real) + latency        :h5, after h4, 1d
+    Session state + allowlist + audit   :h6, after h5, 1d
+    reload-rules + /stats + hot-reload  :h7, after h6, 1d
+    Dry-run + ALWAYS_DENY + bypass      :h8, after h7, 1d
+    Integration: Rule Engine            :crit, h9, after h8, 1d
+    Integration: LLM Tier               :crit, h10, after h9, 1d
+    Edge cases: ; && nested sudo        :h11, after h10, 1d
+    UI polish + latency audit           :h12, after h11, 1d
+    Full test suite + demo + tag        :milestone, h13, after h12, 1d
+
+    section Rule Engine Team
+    Study + environment setup           :p1, 2026-08-01, 2d
+    Tier 0: dd, mkfs, curl pipe         :p2, after p1, 1d
+    Tier 1: rm variants, chmod          :p3, after p2, 1d
+    Tier 1: network/cron/firewall       :p4, after p3, 1d
+    Standalone verdict service          :p5, after p4, 1d
+    Confidence calibration              :p6, after p5, 1d
+    Pattern library docs                :p7, after p6, 1d
+    Integration + gap fixes             :crit, p8, after p7, 1d
+    Final coverage review               :p9, after p8, 3d
+    Add edge case patterns              :p10, after p9, 1d
+    Final pattern coverage              :milestone, p11, after p10, 1d
+
+    section AI Reasoning Team
+    Study + Ollama setup                :v1, 2026-08-01, 2d
+    OllamaClient + GeminiClient         :v2, after v1, 1d
+    OpenAI provider + fallback          :v3, after v2, 1d
+    Timeout tests + reasoner start      :v4, after v3, 1d
+    Core reason() pipeline              :v5, after v4, 1d
+    Prompt tuning + reflection          :v6, after v5, 1d
+    Ambiguous corpus testing            :v7, after v6, 1d
+    Suggester Phase 1 (table)           :v8, after v7, 1d
+    Suggester Phase 2 + integration     :crit, v9, after v8, 1d
+    LLM edge case context               :v10, after v9, 2d
+    Final suggestion quality review     :milestone, v11, after v10, 1d
+```
+
+| Day | Infrastructure Team | Rule Engine Team | AI Reasoning Team |
 |---|---|---|---|
 | 1 | Models contract + mock daemon + zsh hook (pass-through) | Study contract + setup | Study contract + Ollama setup |
 | 2 | Bash hook + daemon socket + `/health` | Tier 0 patterns start | `ResponseParser` tests pass |
@@ -439,8 +486,8 @@ These were gaps in the original proposal — all now included:
 | 6 | Session state + allowlist + audit logging | Standalone verdict service | Core `reason()` pipeline |
 | 7 | `/reload-rules` + `/stats` + hot-reload | Confidence calibration | Prompt tuning + reflection pass |
 | 8 | Dry-run + ALWAYS_DENY + emergency bypass | Pattern library docs | Ambiguous corpus testing |
-| 9 | **Integration: plug in Praveen's rule engine** | Integration + gap fixes | Suggester Phase 1 (table) |
-| 10 | **Integration: plug in Vansh's LLM tier** | Final coverage review | Suggester Phase 2 + integration |
+| 9 | **Integration: plug in Rule Engine Team's rule engine** | Integration + gap fixes | Suggester Phase 1 (table) |
+| 10 | **Integration: plug in AI Reasoning Team's LLM tier** | Final coverage review | Suggester Phase 2 + integration |
 | 11 | Edge cases: `;`, `&&`, nested sudo, heredoc | Add patterns from edge cases | Add LLM context for edge cases |
 | 12 | Confirmation UI polish + latency audit | Final pattern coverage | Final suggestion quality review |
 | 13 | **ALL**: Full test suite + demo script + README + `git tag v1.0.0-hackathon` | | |

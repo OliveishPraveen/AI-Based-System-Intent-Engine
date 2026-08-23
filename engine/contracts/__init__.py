@@ -1,5 +1,5 @@
 """
-Contracts — Owner: Vansh
+Contracts
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Shared Pydantic contracts between the Rule Engine (Praveen),
 the LLM Reasoner (Vansh), and the Alternative Generator (Vansh).

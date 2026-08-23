@@ -1,5 +1,5 @@
 """
-Integration Adapters — Owner: Harshit / Vansh
+Integration Adapters
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Abstract interface + concrete implementation that bridges
 Vansh's Alternative Engine to Praveen's Rule Engine.

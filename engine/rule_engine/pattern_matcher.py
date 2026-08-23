@@ -1,5 +1,5 @@
 """
-Pattern Matcher — Owner: Praveen (OliveishPraveen)
+Pattern Matcher
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Core pattern matching engine evaluating ParsedCommands against Tier 0 structural
 checks and Tier 1 contextual weighted pattern library with Strategy B (Flag &

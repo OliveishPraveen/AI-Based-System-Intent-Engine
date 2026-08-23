@@ -1,5 +1,5 @@
 """
-PatternMatcherAdapter — Owner: Harshit
+PatternMatcherAdapter
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Concrete implementation of Vansh's RuleEngineAdapter interface.

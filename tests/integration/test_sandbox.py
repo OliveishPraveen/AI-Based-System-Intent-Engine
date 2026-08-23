@@ -1,5 +1,5 @@
 """
-Integration tests — Sandbox (Owner: Harshit)
+Integration tests — Sandbox
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Tests the full API pipeline (daemon → rule engine → verdict) against

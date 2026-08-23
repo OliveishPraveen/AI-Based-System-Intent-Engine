@@ -1,5 +1,5 @@
 """
-LLM Reasoner — Owner: Vansh
+LLM Reasoner
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Core LLM-based reasoning for AMBIGUOUS commands that the rule engine

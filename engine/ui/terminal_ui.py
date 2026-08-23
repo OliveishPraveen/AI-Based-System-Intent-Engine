@@ -1,5 +1,5 @@
 """
-Terminal UI — Owner: Harshit
+Terminal UI
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Minimalist charcoal/monochrome confirmation prompt.

@@ -1,5 +1,5 @@
 """
-Rule Engine CLI Runner — Owner: Praveen (OliveishPraveen)
+Rule Engine CLI Runner
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Direct terminal runner for executing the Rule Engine on shell commands.
 Outputs structured Verdict data (JSON or plain text) to stdout, serving as the

@@ -1,5 +1,5 @@
 """
-Safer Alternative Suggester — Owner: Vansh
+Safer Alternative Suggester
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Two-phase suggestion system:

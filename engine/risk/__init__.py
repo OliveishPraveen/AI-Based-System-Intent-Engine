@@ -1,5 +1,5 @@
 """
-Risk Scoring — Owner: Vansh
+Risk Scoring
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Applies deterministic safety adjustments on top of the LLM's
 raw semantic risk classification.

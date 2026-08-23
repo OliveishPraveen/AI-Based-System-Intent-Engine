@@ -1,5 +1,5 @@
 """
-Pattern Loader — Owner: Praveen (OliveishPraveen)
+Pattern Loader
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Loads, validates, normalizes, and caches patterns from rules/dangerous_patterns.toml.
 Provides hot-reloading capabilities for runtime pattern updates without service restart.

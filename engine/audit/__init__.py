@@ -1,5 +1,5 @@
 """
-Audit Logger — Owner: Harshit
+Audit Logger
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Appends a JSONL entry to ~/.intent_engine/logs/audit.jsonl for

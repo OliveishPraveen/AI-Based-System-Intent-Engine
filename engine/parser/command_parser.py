@@ -1,5 +1,5 @@
 """
-Command Parser — Owner: Harshit
+Command Parser
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Converts a raw shell command string into a structured ParsedCommand

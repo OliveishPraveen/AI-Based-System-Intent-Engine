@@ -1,1 +1,1 @@
-"""Parser package — Owner: Harshit"""
+"""Parser package"""

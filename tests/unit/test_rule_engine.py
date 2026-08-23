@@ -1,5 +1,5 @@
 """
-Unit tests for the Rule Engine — Owner: Praveen (OliveishPraveen)
+Unit tests for the Rule Engine
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Validates 100% detection rate on Tier 0 CRITICAL patterns,
 accurate Tier 1 scoring and context weighting,

@@ -1,5 +1,5 @@
 """
-Verdict Builder — Owner: Praveen (OliveishPraveen)
+Verdict Builder
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Assembles rich Verdict instances from matched patterns, computing dynamic template
 interpolations and standardizing risk summaries.

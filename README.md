@@ -278,7 +278,7 @@ pkill -f "engine.daemon.server"
 ├── docs/
 │   ├── ARCHITECTURE.md             # Full architecture diagrams
 │   ├── PROJECT_STRUCTURE.md        # File-level walkthrough
-│   └── WORK_DIVISION.md            # Team ownership
+│   └── DEVELOPMENT_PLAN.md         # Component phased breakdown
 ├── engine/
 │   ├── audit/                      # Append-only JSONL audit logger
 │   ├── contracts/                  # Pydantic schemas (shared types)
@@ -336,8 +336,8 @@ Every flagged command is appended to `~/.intent_engine/logs/audit.jsonl`:
   "pattern": null,
   "tier": "llm",
   "action": "ABORT",
-  "user": "harshitdv",
-  "cwd": "/home/harshitdv",
+  "user": "testuser",
+  "cwd": "/home/user",
   "session_id": "a1b2c3d4-...",
   "latency_ms": 876.3
 }
@@ -345,13 +345,13 @@ Every flagged command is appended to `~/.intent_engine/logs/audit.jsonl`:
 
 ---
 
-## Team
+## Architecture Domains
 
-| Member | Domain | Key Files |
+| Domain | Responsibilities | Key Files |
 |--------|--------|-----------|
-| **Harshit** | Architecture · daemon · shell hooks · parser · Terminal UI · audit | `engine/daemon/` · `hooks/` · `engine/parser/` · `engine/ui/` · `engine/audit/` |
-| **Praveen** | Rule engine · pattern library · Tier 0/1 · obfuscation detection | `engine/rule_engine/` · `rules/dangerous_patterns.toml` |
-| **Vansh** | LLM reasoning · Gemini provider · alternatives · risk scoring | `engine/llm/` · `engine/alternatives/` · `engine/risk/` · `engine/contracts/` |
+| **Infrastructure** | Architecture · daemon · shell hooks · parser · Terminal UI · audit | `engine/daemon/` · `hooks/` · `engine/parser/` · `engine/ui/` · `engine/audit/` |
+| **Rule Engine** | Rule engine · pattern library · Tier 0/1 · obfuscation detection | `engine/rule_engine/` · `rules/dangerous_patterns.toml` |
+| **AI Reasoning** | LLM reasoning · Gemini provider · alternatives · risk scoring | `engine/llm/` · `engine/alternatives/` · `engine/risk/` · `engine/contracts/` |
 
 ---
 

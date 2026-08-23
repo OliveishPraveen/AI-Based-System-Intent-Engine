@@ -1,5 +1,5 @@
 """
-Response Parser — Owner: Vansh
+Response Parser
 Parses and validates the LLM's JSON response into a structured object.
 """
 

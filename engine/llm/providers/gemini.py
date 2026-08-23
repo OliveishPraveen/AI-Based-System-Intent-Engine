@@ -1,5 +1,5 @@
 """
-Gemini Provider — Owner: Vansh
+Gemini Provider
 Google Gemini API provider via the new `google-genai` SDK.
 Used as primary when no local GPU, or as fallback to Ollama.
 

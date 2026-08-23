@@ -1,5 +1,5 @@
 """
-Session Manager — Owner: Harshit
+Session Manager
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Manages per-session state for a single terminal session:

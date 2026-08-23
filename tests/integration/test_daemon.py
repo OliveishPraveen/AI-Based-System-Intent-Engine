@@ -1,5 +1,5 @@
 """
-Integration tests for the Daemon — Owner: Harshit
+Integration tests for the Daemon
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 Tests the fully assembled FastAPI daemon by sending real HTTP requests
 over the Unix socket.

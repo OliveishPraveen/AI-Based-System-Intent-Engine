@@ -1,5 +1,5 @@
 """
-Unit tests for the Command Parser — Owner: Harshit
+Unit tests for the Command Parser
 Tests cover every structural case the rule engine will encounter.
 """
 

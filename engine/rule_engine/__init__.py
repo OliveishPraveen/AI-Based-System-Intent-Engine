@@ -1,5 +1,5 @@
 """
-Rule Engine Package — Owner: Praveen (OliveishPraveen)
+Rule Engine Package
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Fast, deterministic Tier 0 and context-weighted Tier 1 command safety classification.

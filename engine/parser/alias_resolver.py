@@ -1,5 +1,5 @@
 """
-Alias Resolver — Owner: Harshit
+Alias Resolver
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Reads shell aliases from the user's environment and resolves them

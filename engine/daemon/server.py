@@ -1,5 +1,5 @@
 """
-Daemon Server — Owner: Harshit
+Daemon Server
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Responsibilities:

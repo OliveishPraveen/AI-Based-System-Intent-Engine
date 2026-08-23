@@ -1,6 +1,6 @@
 #!/usr/bin/env zsh
 # ═══════════════════════════════════════════════════════════════════════════════
-# Intent Engine — Zsh Shell Hook (Owner: Harshit)
+# Intent Engine — Zsh Shell Hook
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # ARCHITECTURE: ZLE accept-line override

@@ -1,1 +1,1 @@
-"""LLM providers package — Owner: Vansh"""
+"""LLM providers package"""

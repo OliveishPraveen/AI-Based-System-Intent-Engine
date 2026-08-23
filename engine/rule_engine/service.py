@@ -1,5 +1,5 @@
 """
-Standalone Rule Engine Service — Owner: Praveen (OliveishPraveen)
+Standalone Rule Engine Service
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 FastAPI microservice serving standalone Rule Engine verdicts, pattern library
 introspection, and runtime rule reload endpoints.
