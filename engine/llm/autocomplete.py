@@ -1,37 +1,36 @@
-"""
-Autocomplete Engine — Owner: Harshit
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-CLI Copilot: LLM-powered shell command autocomplete.
-Completely separate from the safety engine pipeline.
-
-3-Tier speed strategy:
-  Tier A: Local dictionary       → 0ms   (hardcoded common commands)
-  Tier B: LRU prefix cache       → 0ms   (repeated queries in session)
-  Tier C: Streaming Ollama call  → 80–300ms first token
-
-Design constraints:
-  - NEVER blocks the keystroke. All calls are async.
-  - Minimum prefix length: 3 chars (prevents spamming on 'l', 'ls')
-  - Hard timeout: 800ms (vs 3s for safety engine)
-  - Returns empty list on any error (graceful degradation)
+# Autocomplete Engine — Owner: Harshit
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# CLI Copilot: intelligent shell command autocomplete.
+# Completely separate from the safety engine pipeline.
+#
+# 3-Tier speed strategy:
+#   Tier A: Local dictionary       → 0ms   (400+ hardcoded commands)
+#   Tier B: LRU prefix cache       → 0ms   (repeated queries in session)
+#   Tier C: Gemini API call        → ~600ms (only for truly unknown commands)
+#
+# Design constraints:
+#   - NEVER blocks the keystroke. All calls are async.
+#   - Minimum prefix length: 3 chars (prevents spamming on 'l', 'ls')
+#   - Hard timeout: 2.0s
+#   - Returns empty list on any error (graceful degradation)
+#   - LLM fallback is disabled if INTENT_GEMINI_API_KEY is not set
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 from collections import OrderedDict
 from typing import Any
 
-import httpx
 import structlog
 
 log = structlog.get_logger()
 
-_OLLAMA_BASE = "http://localhost:11434"
-_AUTOCOMPLETE_TIMEOUT_S = 2.0    # 2s cap — enough for warm LLM on CPU
+_AUTOCOMPLETE_TIMEOUT_S = 2.0    # 2s cap
 _MIN_PREFIX_LEN = 3              # Don't fire LLM for 1-2 char prefixes
 _CACHE_MAX_SIZE = 64             # LRU eviction after 64 unique prefixes
 
@@ -450,11 +449,14 @@ class AutocompleteEngine:
 
     def __init__(self, config: dict[str, Any]) -> None:
         self._config = config
-        self._model = config.get("llm", {}).get("model", "llama3.2:3b")
-        self._ollama_url = config.get("llm", {}).get("ollama_url", _OLLAMA_BASE)
+        llm_cfg = config.get("llm", {})
+        self._gemini_model = llm_cfg.get("gemini_model", "gemini-3.6-flash")
+        self._api_key = (
+            os.environ.get("INTENT_GEMINI_API_KEY")
+            or llm_cfg.get("gemini_api_key", "")
+        )
         self._cache: OrderedDict[str, list[dict]] = OrderedDict()
         self._cache_lock = asyncio.Lock()
-        self._ollama_healthy: bool | None = None  # None = not yet checked
 
     async def get_completions(
         self,
@@ -489,10 +491,13 @@ class AutocompleteEngine:
                 log.debug("autocomplete_cache_hit", prefix=partial[:20])
                 return cached, "cache"
 
-        # ── Tier C: Streaming Ollama ───────────────────────────────────────────
+        # ── Tier C: Gemini API (only if API key is configured) ────────────────
+        if not self._api_key:
+            log.debug("autocomplete_llm_skipped", reason="no_api_key")
+            return [], "no_key"
         try:
             results = await asyncio.wait_for(
-                self._ollama_complete(partial, cwd),
+                self._gemini_complete(partial, cwd),
                 timeout=_AUTOCOMPLETE_TIMEOUT_S,
             )
             if results:
@@ -547,73 +552,42 @@ class AutocompleteEngine:
         return results[:4]
 
 
-    async def _ollama_complete(self, partial: str, cwd: str) -> list[dict]:
+    async def _gemini_complete(self, partial: str, cwd: str) -> list[dict]:
         """
-        Call Ollama's /api/generate with streaming — first token arrives in ~80ms.
+        Call Gemini API for autocomplete suggestions.
+        Only fired when the local dictionary misses — which is rare (<5% of queries).
+        Uses the same google-genai client as the safety engine.
+        """
+        from google import genai  # type: ignore
 
-        Strategy: stream tokens and stop as soon as we have a valid JSON object.
-        This avoids waiting for the full completion (~400ms → ~80ms for first result).
-        """
         prompt = (
-            f"Complete this partial shell command: \"{partial}\"\n"
+            f'Complete this partial Linux shell command: "{partial}"\n'
             f"Context: cwd={cwd or '~'}\n"
-            "Respond ONLY with valid JSON. No markdown. No explanation.\n"
-            'Schema: {"completions":[{"cmd":"<complete command>","desc":"<max 6 words>"}]}\n'
-            "Return exactly 3 completions, most likely first."
+            'Return ONLY valid JSON, no markdown:\n'
+            '{"completions":[{"cmd":"<complete command>","desc":"<max 6 words>"}]}\n'
+            "Return exactly 3 completions, most common first."
         )
 
-        collected = ""
-        async with httpx.AsyncClient(timeout=_AUTOCOMPLETE_TIMEOUT_S) as client:
-            async with client.stream(
-                "POST",
-                f"{self._ollama_url}/api/generate",
-                json={
-                    "model": self._model,
-                    "prompt": prompt,
-                    "stream": True,
-                    "format": "json",
-                    "options": {
-                        "temperature": 0.1,   # low temp = more predictable completions
-                        "num_predict": 200,   # cap tokens — completions are short
-                    },
+        loop = asyncio.get_event_loop()
+        client = genai.Client(api_key=self._api_key)
+        response = await loop.run_in_executor(
+            None,
+            lambda: client.models.generate_content(
+                model=self._gemini_model,
+                contents=prompt,
+                config={
+                    "response_mime_type": "application/json",
+                    "temperature": 0.1,
                 },
-            ) as resp:
-                resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.strip():
-                        continue
-                    try:
-                        chunk = json.loads(line)
-                    except json.JSONDecodeError:
-                        continue
-                    collected += chunk.get("response", "")
-                    # Early exit: try to parse as soon as we have a closing }
-                    if "}" in collected:
-                        try:
-                            parsed = json.loads(collected)
-                            raw = parsed.get("completions", [])
-                            if raw:
-                                return [
-                                    {"cmd": str(item.get("cmd", "")), "desc": str(item.get("desc", ""))}
-                                    for item in raw
-                                    if item.get("cmd")
-                                ][:4]
-                        except json.JSONDecodeError:
-                            pass  # keep collecting
-                    if chunk.get("done"):
-                        break
-
-        # Final attempt on complete buffer
-        try:
-            parsed = json.loads(collected)
-            raw = parsed.get("completions", [])
-            return [
-                {"cmd": str(item.get("cmd", "")), "desc": str(item.get("desc", ""))}
-                for item in raw
-                if item.get("cmd")
-            ][:4]
-        except (json.JSONDecodeError, KeyError):
-            return []
+            ),
+        )
+        data = json.loads(response.text)
+        raw = data.get("completions", [])
+        return [
+            {"cmd": str(item.get("cmd", "")), "desc": str(item.get("desc", ""))}
+            for item in raw
+            if item.get("cmd")
+        ][:3]
 
 
     async def _cache_set(self, key: str, value: list[dict]) -> None:
