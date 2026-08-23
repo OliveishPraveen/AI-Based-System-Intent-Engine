@@ -79,9 +79,9 @@ graph TD
     end
     UI --> Audit["engine/audit/<br/>audit.jsonl"]
 
-    style Models fill:#8e44ad,color:#fff
-    style Hook fill:#2c3e50,color:#fff
-    style Audit fill:#2c3e50,color:#fff
+    style Models fill:#5b21b6,color:#fff
+    style Hook fill:#1e293b,color:#fff
+    style Audit fill:#1e293b,color:#fff
 ```
 
 ## Component Layers
@@ -109,9 +109,9 @@ graph LR
         V4["engine/contracts/"]
     end
 
-    style Infra fill:#1a3a5c,color:#fff
-    style Rules fill:#5c2a00,color:#fff
-    style AI fill:#0a3d26,color:#fff
+    style Infra fill:#1e293b,color:#fff
+    style Rules fill:#78350f,color:#fff
+    style AI fill:#064e3b,color:#fff
 ```
 
 ---

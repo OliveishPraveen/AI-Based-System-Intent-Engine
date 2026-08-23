@@ -35,9 +35,9 @@ flowchart TD
     Daemon --> UI
     UI -->|"user decision"| User
 
-    style Infrastructure Team fill:#1a3a5c,color:#fff
-    style Rule Engine Team fill:#5c2a00,color:#fff
-    style AI Reasoning Team fill:#0a3d26,color:#fff
+    style Infrastructure Team fill:#1e293b,color:#fff
+    style Rule Engine Team fill:#78350f,color:#fff
+    style AI Reasoning Team fill:#064e3b,color:#fff
 ```
 
 ---
@@ -443,17 +443,17 @@ gantt
     Session state + allowlist + audit   :h6, after h5, 1d
     reload-rules + /stats + hot-reload  :h7, after h6, 1d
     Dry-run + ALWAYS_DENY + bypass      :h8, after h7, 1d
-    Integration: Rule Engine            :crit, h9, after h8, 1d
-    Integration: LLM Tier               :crit, h10, after h9, 1d
-    Edge cases: ; && nested sudo        :h11, after h10, 1d
+    Integration - Rule Engine            :crit, h9, after h8, 1d
+    Integration - LLM Tier               :crit, h10, after h9, 1d
+    Edge cases - ; && nested sudo        :h11, after h10, 1d
     UI polish + latency audit           :h12, after h11, 1d
     Full test suite + demo + tag        :milestone, h13, after h12, 1d
 
     section Rule Engine Team
     Study + environment setup           :p1, 2026-08-01, 2d
-    Tier 0: dd, mkfs, curl pipe         :p2, after p1, 1d
-    Tier 1: rm variants, chmod          :p3, after p2, 1d
-    Tier 1: network/cron/firewall       :p4, after p3, 1d
+    Tier 0 - dd, mkfs, curl pipe         :p2, after p1, 1d
+    Tier 1 - rm variants, chmod          :p3, after p2, 1d
+    Tier 1 - network/cron/firewall       :p4, after p3, 1d
     Standalone verdict service          :p5, after p4, 1d
     Confidence calibration              :p6, after p5, 1d
     Pattern library docs                :p7, after p6, 1d
@@ -481,8 +481,8 @@ gantt
 | 1 | Models contract + mock daemon + zsh hook (pass-through) | Study contract + setup | Study contract + Ollama setup |
 | 2 | Bash hook + daemon socket + `/health` | Tier 0 patterns start | `ResponseParser` tests pass |
 | 3 | Command parser (shlex, sudo, globs) | Tier 0: dd, mkfs, curl\|sh | OllamaClient + GeminiClient |
-| 4 | Pipe splitter + subshell/redirect detection | Tier 1: rm variants, chmod | OpenAI provider + fallback |
-| 5 | Tier router (real, not mock) + latency harness | Tier 1: network/cron/firewall | Timeout tests + reasoner start |
+| 4 | Pipe splitter + subshell/redirect detection | Tier 1 - rm variants, chmod | OpenAI provider + fallback |
+| 5 | Tier router (real, not mock) + latency harness | Tier 1 - network/cron/firewall | Timeout tests + reasoner start |
 | 6 | Session state + allowlist + audit logging | Standalone verdict service | Core `reason()` pipeline |
 | 7 | `/reload-rules` + `/stats` + hot-reload | Confidence calibration | Prompt tuning + reflection pass |
 | 8 | Dry-run + ALWAYS_DENY + emergency bypass | Pattern library docs | Ambiguous corpus testing |

@@ -42,11 +42,11 @@ graph TB
     UI -->|"user chooses"| Audit
     Allow --> Audit
 
-    style T0 fill:#c0392b,color:#fff
-    style T1 fill:#e67e22,color:#fff
-    style T2 fill:#2980b9,color:#fff
-    style UI fill:#27ae60,color:#fff
-    style Audit fill:#8e44ad,color:#fff
+    style T0 fill:#9f1239,color:#fff
+    style T1 fill:#b45309,color:#fff
+    style T2 fill:#1e40af,color:#fff
+    style UI fill:#059669,color:#fff
+    style Audit fill:#5b21b6,color:#fff
 ```
 
 ---
@@ -85,12 +85,12 @@ flowchart TD
     ROUTER -->|"risk >= threshold"| BLOCK["Render Terminal UI<br/>Wait for [y/n/s]"]
     ROUTER -->|"risk < threshold"| PASS["Allow execution"]
 
-    style CRIT fill:#c0392b,color:#fff
-    style T0 fill:#c0392b,color:#fff,stroke:#922b21
-    style T1 fill:#e67e22,color:#fff,stroke:#a04000
-    style T2 fill:#2980b9,color:#fff,stroke:#1a5276
-    style CACHE fill:#16a085,color:#fff
-    style BLOCK fill:#27ae60,color:#fff
+    style CRIT fill:#9f1239,color:#fff
+    style T0 fill:#9f1239,color:#fff,stroke:#7e0f2d
+    style T1 fill:#b45309,color:#fff,stroke:#92400e
+    style T2 fill:#1e40af,color:#fff,stroke:#1e3a8a
+    style CACHE fill:#0f766e,color:#fff
+    style BLOCK fill:#059669,color:#fff
 ```
 
 ---
@@ -154,11 +154,11 @@ flowchart LR
     TAB -->|"No (ESC)"| DISMISS["Clear ghost-text"]
     TAB -->|"No (Enter)"| SAFETY["Chain to<br/>intent_hook.zsh<br/>(safety engine)"]
 
-    style LOCAL fill:#16a085,color:#fff
-    style APICALL fill:#2980b9,color:#fff
-    style GHOST fill:#27ae60,color:#fff
-    style GHOST2 fill:#27ae60,color:#fff
-    style SAFETY fill:#e67e22,color:#fff
+    style LOCAL fill:#0f766e,color:#fff
+    style APICALL fill:#1e40af,color:#fff
+    style GHOST fill:#059669,color:#fff
+    style GHOST2 fill:#059669,color:#fff
+    style SAFETY fill:#b45309,color:#fff
 ```
 
 ---
@@ -185,9 +185,9 @@ flowchart TD
     BUILD --> STORE_CACHE["Store in LRU cache<br/>(if not AMBIGUOUS)"]
     STORE_CACHE --> RETURN_LLM["Return Verdict"]
 
-    style GEMINI fill:#2980b9,color:#fff
-    style CACHE_CHECK fill:#16a085,color:#fff
-    style RETURN_CACHE fill:#16a085,color:#fff
+    style GEMINI fill:#1e40af,color:#fff
+    style CACHE_CHECK fill:#0f766e,color:#fff
+    style RETURN_CACHE fill:#0f766e,color:#fff
 ```
 
 ---
@@ -218,10 +218,10 @@ flowchart TD
 
     THRESH -->|"No"| AMB["AMBIGUOUS<br/>Escalate to Tier 2"]
 
-    style T0 fill:#c0392b,color:#fff
-    style TOML fill:#e67e22,color:#fff
-    style CRIT_VERDICT fill:#c0392b,color:#fff
-    style AMB fill:#2980b9,color:#fff
+    style T0 fill:#9f1239,color:#fff
+    style TOML fill:#b45309,color:#fff
+    style CRIT_VERDICT fill:#9f1239,color:#fff
+    style AMB fill:#1e40af,color:#fff
 ```
 
 ---
@@ -263,9 +263,9 @@ graph LR
     V4 -->|"shared schemas"| P1
     V4 -->|"shared schemas"| V1
 
-    style Infra fill:#1a252f,color:#fff,stroke:#2980b9
-    style Rules fill:#1a252f,color:#fff,stroke:#e67e22
-    style AI fill:#1a252f,color:#fff,stroke:#27ae60
+    style Infra fill:#0f172a,color:#fff,stroke:#1e40af
+    style Rules fill:#0f172a,color:#fff,stroke:#b45309
+    style AI fill:#0f172a,color:#fff,stroke:#059669
 ```
 
 ---
@@ -282,8 +282,8 @@ flowchart LR
 
     FORMAT -.->|"future"| ANALYTICS["Analytics Dashboard<br/>(planned)"]
 
-    style LOGGER fill:#8e44ad,color:#fff
-    style JSONL fill:#2c3e50,color:#fff
+    style LOGGER fill:#5b21b6,color:#fff
+    style JSONL fill:#1e293b,color:#fff
 ```
 
 ---
