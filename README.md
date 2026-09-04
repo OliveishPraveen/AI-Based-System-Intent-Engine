@@ -43,7 +43,7 @@ $ rm -rf /var/log/*                   ← command entered, Enter pressed
   ┌─────────────────┐    ┌─────────────────┐    ┌──────────────────────────┐
   │   Tier 0/1      │ OR │   Tier 2        │ →  │   Terminal UI            │
   │   Rule Engine   │    │   LLM Reasoning │    │   Risk bar + Intent      │
-  │   (<50ms)       │    │   (<2s, Gemini) │    │   Safer alternative      │
+  │   (<50ms)       │    │   (<2s, qwen)   │    │   Safer alternative      │
   └─────────────────┘    └─────────────────┘    │   [y/n/s] choice         │
                                                   └──────────────────────────┘
                                                           │
@@ -70,7 +70,7 @@ $ rm -rf /var/log/*                   ← command entered, Enter pressed
 │                                                             │
 │  ┌──────────┐   ┌────────────────┐   ┌───────────────────┐ │
 │  │  Parser  │→  │  Rule Engine   │→  │   LLM Reasoner    │ │
-│  │  shlex   │   │  Tier 0 regex  │   │   Gemini 3.6 Flash│ │
+│  │  shlex   │   │  Tier 0 regex  │   │   qwen2.5:0.5b    │ │
 │  │  AST     │   │  Tier 1 TOML   │   │   LRU Cache (128) │ │
 │  └──────────┘   └────────────────┘   └───────────────────┘ │
 │                         │                       │           │
@@ -94,11 +94,11 @@ $ rm -rf /var/log/*                   ← command entered, Enter pressed
 
 ## Three-Tier Decision Pipeline
 
-| Tier | Method | Latency | Triggered When |
-|------|--------|---------|----------------|
-| **Tier 0** | Hardcoded regex (fork bomb, rm -rf /, dd to raw device) | < 1ms | Always, first check |
-| **Tier 1** | 41 curated TOML patterns with confidence scoring | < 50ms | All structured commands |
-| **Tier 2** | Gemini 3.6 Flash cloud LLM + LRU session cache | < 2s | Rule engine returns AMBIGUOUS |
+|    Tier    |                         Method                         |Latency |         Triggered When          |
+|------------|--------------------------------------------------------|--------|---------------------------------|
+| **Tier 0** | Hardcoded regex (fork bomb, rm -rf /, dd to raw device)| < 1ms  | Always, first check             |
+| **Tier 1** | 41 curated TOML patterns with confidence scoring       | < 50ms | All structured commands         | 
+| **Tier 2** | ollama qwen2.5:0.5b LLM + LRU session cache            | < 2s   | Rule engine returns AMBIGUOUS   |
 
 If a command passes Tier 0 and Tier 1 with high confidence (SAFE, LOW, HIGH, or CRITICAL — not AMBIGUOUS), Tier 2 is **never called**. The LLM is only invoked for genuinely ambiguous situations.
 
@@ -112,7 +112,7 @@ If a command passes Tier 0 and Tier 1 with high confidence (SAFE, LOW, HIGH, or 
 | Daemon | Python 3.12 · FastAPI · Uvicorn · Unix domain socket |
 | Command parsing | `shlex` · custom pipeline / redirect / subshell AST |
 | Rule engine | TOML pattern library · confidence-weighted scoring · obfuscation detection |
-| LLM reasoning | Google Gemini 3.6 Flash API (`google-genai` SDK) |
+| LLM reasoning | ollama qwen2.5:0.5b local model |
 | Safer alternatives | Curated suggestion table + LLM output (no second LLM call) |
 | Autocomplete | ZLE `POSTDISPLAY` ghost-text · local dictionary (150+ commands) · async LLM fallback |
 | Audit logging | Append-only JSONL at `~/.intent_engine/logs/audit.jsonl` |
@@ -154,7 +154,7 @@ If a command passes Tier 0 and Tier 1 with high confidence (SAFE, LOW, HIGH, or 
 - **Best for:** Live demo, production use
 
 ### Mode 2: Local Mode (Ollama)
-- **Provider:** Ollama with any GGUF model (e.g. `qwen2.5:7b`)
+- **Provider:** Ollama with any GGUF model (e.g. `qwen2.5:0.5b`)
 - **Requires:** `ollama serve` running · sufficient RAM/VRAM
 - **Latency:** Tier 0/1 < 50ms · Tier 2: 5–60s on CPU (unusable), < 5s on GPU
 - **Best for:** Offline, privacy-critical environments with a GPU
@@ -183,9 +183,9 @@ cd AI-Based-System-Intent-Engine
 python3 -m venv .venv && source .venv/bin/activate
 pip install -e ".[dev]"
 
-# 3. Set your Gemini API key (get one free at https://aistudio.google.com/app/apikey)
-export INTENT_GEMINI_API_KEY="your_key_here"
-echo 'export INTENT_GEMINI_API_KEY="your_key_here"' >> ~/.zshrc
+# 3. Set your Ollama model
+pull qwen2.5:0.5b from ollama server
+
 
 # 4. Install hooks + daemon
 bash install.sh
@@ -215,8 +215,8 @@ block_threshold = "HIGH"     # Tier that triggers the UI: LOW | MEDIUM | HIGH | 
 dry_run = false              # true = analyze but never block
 
 [llm]
-provider = "gemini"          # "gemini" | "ollama" | "openai"
-model    = "gemini-3.6-flash"
+provider = "ollama"          #  "ollama" 
+model    = "qwen2.5:0.5b"
 timeout_s = 10.0             # Hard timeout before falling back to pass-through
 
 [daemon]
@@ -284,7 +284,7 @@ pkill -f "engine.daemon.server"
 │   ├── contracts/                  # Pydantic schemas (shared types)
 │   ├── daemon/                     # FastAPI server, router, session manager
 │   ├── llm/                        # LLM client, reasoner, autocomplete, prompts
-│   │   └── providers/              # gemini.py, ollama.py, openai.py
+│   │   └── providers/              # ollama.py
 │   ├── parser/                     # Command AST parser (pipes, redirects, subshells)
 │   ├── risk/                       # Semantic risk escalation scoring
 │   ├── rule_engine/                # Pattern matcher, TOML loader, verdict builder
